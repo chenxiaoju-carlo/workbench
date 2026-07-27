@@ -1089,20 +1089,12 @@ const VERIFIED_TOPICS=[
 ];
 
 let lastLocalSave=0;
+let _booted=false; /* 启动完成标志：完成前 save() 不触发推送，避免首屏空种子覆盖云端 */
 let _pushTimer=null;
-/* ====== 自动预置配置（AI 模型 + 云端同步初始化） ====== */
+/* ====== 状态加载（首次加载返回 null，由 bootSync 先从云端拉取） ====== */
 let state=load();
-try{
-  /* 智谱免费模型：未配置时自动填入（用户无需手动填） */
-  if(!state.settings.llmKey){
-    state.settings.llmBase='https://open.bigmodel.cn/api/paas/v4';
-    state.settings.llmModel='glm-4-flash';
-    state.settings.llmKey='2bb849ce889e43378b681eea7f6c4afb.INXWowhjWqdHeO55';
-    save();
-  }
-  /* 确保自动同步开启（blob id 的恢复在下方 sync 模块初始化中处理） */
-  if(!state.settings.autoSync){state.settings.autoSync=true;save();}
-}catch(e){ console.error('预置配置出错（已忽略）:',e); }
+/* 预置配置（AI 模型 + 强制开启云端同步）推迟到状态确定后由 applyPreset() 执行，
+   绝不在从云端拉取之前 save() 把空种子覆盖到云端（修复「数据丢失」bug） */
 /* ====== 预置结束 ====== */
 
 let openChatId=null;
@@ -1413,11 +1405,12 @@ function load(){
     const raw=localStorage.getItem(KEY);
     if(raw){const d=JSON.parse(raw);migrate(d);return d;}
   }catch(e){}
-  return initState();
+  return null; /* 首次加载（无本地数据）→ 交由 bootSync 先从云端拉取，绝不返回空种子 */
 }
 function initState(){
   return {
     version:2,
+    _seeded:true, /* 标记这是初始种子数据：同步时不应与云端合并成重复，且应优先采用云端 */
     tasksDate:todayStr(),
     tasks:SEED_TASKS.map(n=>({id:uid(),name:n,done:false,chat:[]})),
     streak:0,lastDoneAll:null,
@@ -1435,6 +1428,7 @@ function initState(){
 }
 function migrate(d){
   d.version=d.version||2;
+  d._seeded = d._seeded===true; /* 保留种子标记，真实数据持久化后为 false */
   d.settings=Object.assign({persona:'',llmBase:'',llmModel:'',llmKey:'',syncMode:'gist',syncUrl:'',syncToken:'',gistUrl:'',ghToken:'',hotspotUrl:'',autoSync:false},d.settings||{});
   d.ideas=d.ideas||[];d.posts=d.posts||[];d.reading=d.reading||[];
   d.verified=d.verified||VERIFIED_TOPICS.map(v=>({id:uid(),t:v.t,why:v.why||'',tip:v.tip||''}));
@@ -1463,7 +1457,7 @@ function save(){
   localStorage.setItem(KEY,JSON.stringify(state));
   lastLocalSave=Date.now();
   /* 延长同步触发间隔到 3 秒，减少网络请求频率 */
-  if(state.settings.autoSync&&syncReady()){
+  if(_booted && state.settings.autoSync && syncReady()){
     clearTimeout(_pushTimer);_pushTimer=setTimeout(()=>{pushSync(true);},3000);
   }
 }
@@ -3291,14 +3285,27 @@ function scheduleRetryPush(silent){
   },_retryBackoff);
 }
 
-/* 智能合并：数组按 id 并集（双方新增的数据都保留），settings 以本机为准 */
+/* 智能合并：云端为跨设备唯一真相源。
+   - 本机若是初始种子数据(_seeded) → 直接采用云端，避免种子任务被并集成重复
+   - 否则按 id 并集；合并前先剔除本机里「名字与 SEED_TASKS 完全一致的占位任务」，杜绝重复计划 */
 function mergeRemote(remote){
+  if(state._seeded){
+    const adopted=JSON.parse(JSON.stringify(remote));
+    adopted._seeded=false;
+    adopted._syncBlobId=_activeBlobId;
+    return adopted;
+  }
   const merged=JSON.parse(JSON.stringify(remote));
   const arrKeys=['tasks','ideas','verified','posts','reading','plans','learning','moods','favorites','dailyLog'];
   for(const k of arrKeys){
     if(Array.isArray(remote[k])&&Array.isArray(state[k])){
       const map=new Map();
-      state[k].forEach(x=>{if(x&&x.id)map.set(x.id,x);});
+      if(k==='tasks'){
+        /* 过滤掉本机中的种子占位任务（非用户数据），防止与云端同名任务叠加成重复 */
+        state[k].forEach(x=>{ if(x&&x.id && !(x.name && SEED_TASKS.includes(x.name))) map.set(x.id,x); });
+      }else{
+        state[k].forEach(x=>{if(x&&x.id)map.set(x.id,x);});
+      }
       remote[k].forEach(x=>{if(x&&x.id)map.set(x.id,x);});
       merged[k]=[...map.values()];
     }
@@ -3493,11 +3500,13 @@ function exportData(){
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);
   a.download='chenxiaoju-workbench-'+todayStr()+'.json';a.click();toast('已导出备份');
 }
-function importData(e){
-  const f=e.target.files[0];if(!f)return;
+function importData(arg){
+  /* 同时兼容两种调用：onchange="importData(event)"（传事件）与 onchange="importData(this.files[0])"（传 File） */
+  const f=(arg&&arg.target)?arg.target.files[0]:arg;
+  if(!f)return;
   const r=new FileReader();
   r.onload=()=>{try{const d=JSON.parse(r.result);migrate(d);state=d;save();fullRender();toast('已恢复数据');}catch(err){toast('文件格式错误');}};
-  r.readAsText(f);e.target.value='';
+  r.readAsText(f);if(arg&&arg.target)arg.target.value='';
 }
 
 /* ---------- util ---------- */
@@ -3505,6 +3514,7 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;',
 
 /* ---------- render all ---------- */
 function fullRender(){
+  hideBootLoading();
   renderMotivation();renderOverview();renderTasks();renderDailyPlan();
   renderIdeaToday();renderVerified();renderFavSection('idea');
   renderTrends();renderFavSection('trend');renderReview();renderBooks();renderBookRecDaily();renderReadingAdvice();renderFavBooks();
@@ -3513,24 +3523,74 @@ function fullRender(){
 }
 
 /* ---------- init ---------- */
-function bootSync(){
-  /* ★ 先渲染页面，确保用户立刻能看到所有内容并点击 ★ */
-  fullRender();
-  if(state.settings.hotspotUrl)fetchHotspots(true);
-  /* 然后在后台同步（不阻塞 UI） */
-  if(state.settings.autoSync&&syncReady()){
-    pullSync().catch(e=>console.error('自动拉取失败（本机照常可用）:',e)).then(()=>{
-      /* 拉取成功后用合并后的数据重新渲染一次 */
-      fullRender();
-    });
-    /* 实时同步：手机/电脑改动后，另一端 30 秒内自动看到 */
-    setInterval(()=>{try{silentPull();}catch(e){}},30000);
+/* 首屏占位：拉取云端期间显示加载提示（不依赖 state） */
+function renderBootPlaceholder(){
+  let el=document.getElementById('__bootLoading');
+  if(!el){
+    el=document.createElement('div');
+    el.id='__bootLoading';
+    el.style.cssText='position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#fff;color:#666;font-size:16px;z-index:9999';
+    el.textContent='☁️ 正在从云端同步你的数据…';
+    document.body.appendChild(el);
   }
 }
+function hideBootLoading(){const el=document.getElementById('__bootLoading');if(el)el.remove();}
+/* 预置：免费 AI 模型 + 强制开启云端同步（在状态确定后执行） */
+function applyPreset(){
+  if(!state||!state.settings)return;
+  if(!state.settings.llmKey){
+    state.settings.llmBase='https://open.bigmodel.cn/api/paas/v4';
+    state.settings.llmModel='glm-4-flash';
+    state.settings.llmKey='2bb849ce889e43378b681eea7f6c4afb.INXWowhjWqdHeO55';
+  }
+  state.settings.autoSync=true; /* 固定开启：共享 blob，永远实时同步 */
+}
+/* 启动时先从云端拉取（云端为跨设备唯一真相源；绝不先 push 空种子） */
+async function bootPull(firstLoad){
+  let res=await cloudGet(_activeBlobId);
+  if(res.status===404){
+    try{
+      const cand=localStorage.getItem('wb_blob_id');
+      if(cand&&cand!==_activeBlobId){
+        const f=await cloudGet(cand);
+        if(f.ok&&f.obj&&f.obj._syncBlobId){ adoptBlobId(f.obj._syncBlobId); res=await cloudGet(_activeBlobId); }
+      }
+    }catch(e){}
+  }
+  if(res.ok&&res.obj&&res.obj._syncBlobId&&res.obj._syncBlobId!==_activeBlobId){
+    adoptBlobId(res.obj._syncBlobId); res=await cloudGet(_activeBlobId);
+  }
+  const obj=(res.ok&&res.obj)?res.obj:null;
+  const remoteHas=obj&&(((obj.tasks||[]).length)||(obj.favorites||[]).length||(obj.ideas||[]).length||(obj.verified||[]).length||Object.keys(obj.dailyLog||{}).length);
+  if(firstLoad){
+    if(obj){ migrate(obj); obj._seeded=false; state=obj; /* 采用云端，不 seed、不合并 → 无重复、无丢失 */ }
+    else { state=initState(); applyPreset(); pushSync(true); /* 云端空 → 本地 seed 并初始化云端 */ }
+  }else{
+    if(obj){ state=mergeRemote(obj); /* 本地已有数据：智能合并（已剔除种子占位） */ }
+    else { pushSync(true); /* 云端空 → 本机推上去 */ }
+  }
+}
+function bootSync(){
+  const firstLoad=!state;
+  if(state){ fullRender(); } else { renderBootPlaceholder(); }
+  if(state&&state.settings.hotspotUrl) fetchHotspots(true);
+  /* 永远先从云端拉取；完成后再开启实时同步（每 30 秒） */
+  bootPull(firstLoad).catch(e=>{ console.error('云端拉取失败（本机照常可用）:',e); }).finally(()=>{
+    if(firstLoad && !state){ state=initState(); }
+    applyPreset();
+    _booted=true;
+    save(); /* 此时 push 安全：状态已是云端/合并结果，或离线 seed */
+    fullRender();
+    if(state){ const hd=document.getElementById('histDate'); if(hd){hd.value=todayStr();renderHistoryChips();renderHistory(todayStr());} }
+    /* 实时同步：手机/电脑任一端改动并保存后，另一端最多 30 秒内自动看到 */
+    setInterval(()=>{ try{ silentPull(); }catch(e){} },30000);
+  });
+}
 /* 无论如何先把页面渲染出来（导航/数据永远可用），同步在后台进行 */
-try{ bootSync(); }catch(e){ console.error('初始化出错，已强制渲染页面:',e); fullRender(); }
-/* 每日回顾：默认今天 */
+try{ bootSync(); }catch(e){ console.error('初始化出错，已强制渲染页面:',e); if(!state)state=initState(); applyPreset(); fullRender(); if(state){const hd=document.getElementById('histDate'); if(hd){hd.value=todayStr();renderHistoryChips();renderHistory(todayStr());}} }
+/* 每日回顾：默认今天（首次加载 state 可能尚未拉取云端，此处跳过，交由 bootSync 渲染） */
 (function(){
+  if(!state)return;
   const hd=document.getElementById('histDate');
   if(hd){hd.value=todayStr();renderHistoryChips();renderHistory(todayStr());}
 })();
