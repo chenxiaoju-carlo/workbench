@@ -1451,15 +1451,13 @@ function migrate(d){
     d.tasksDate=todayStr();
   }
 }
+function persistLocal(){ try{ localStorage.setItem(KEY,JSON.stringify(state)); }catch(e){} }
 function save(){
-  state.lastModified=Date.now();
-  recordDaily();
-  localStorage.setItem(KEY,JSON.stringify(state));
+  try{ state.lastModified=Date.now(); }catch(e){}
+  try{ recordDaily(); }catch(e){} /* 快照失败绝不影响持久化与同步 */
+  persistLocal();                 /* 本地永远先写，刷新不丢 */
   lastLocalSave=Date.now();
-  /* 延长同步触发间隔到 3 秒，减少网络请求频率 */
-  if(_booted && state.settings.autoSync && syncReady()){
-    clearTimeout(_pushTimer);_pushTimer=setTimeout(()=>{pushSync(true);},3000);
-  }
+  schedulePush();                 /* 安排（防抖后）上传云端 */
 }
 /* 每天自动给当天做一次快照，供「每日回顾」查看历史 */
 function recordDaily(){
@@ -3196,19 +3194,15 @@ function adoptBlobId(id){
   try{localStorage.setItem('wb_blob_id',id);}catch(e){}
 }
 
-/* 带指数退避的重试：对 429 限流自动等待后重试（最多 5 次，最长等 16 秒） */
-async function retryFetch(fn, label){
-  for(let attempt=0;attempt<5;attempt++){
-    const r=await fn();
-    if(r.status===429&&attempt<4){
-      const wait=Math.pow(2,attempt)*1000; /* 1s → 2s → 4s → 8s → 16s */
-      await new Promise(res=>setTimeout(res,wait));
-      continue;
-    }
-    return r;
+/* 带指数退避的重试：对 429 限流/网络错误自动等待后重试（最多 3 次，最长等约 7 秒，避免阻塞启动过久） */
+async function retryFetch(fn){
+  let last={status:-1};
+  for(let attempt=0;attempt<3;attempt++){
+    try{ const r=await fn(); last=r; if(r.status!==429) return r; }
+    catch(e){ last={status:-1}; }
+    if(attempt<2){ const wait=Math.min(1000*Math.pow(2,attempt),4000); await new Promise(res=>setTimeout(res,wait)); }
   }
-  /* 5 次都失败，返回最后一次结果 */
-  return fn();
+  return last;
 }
 
 async function cloudGet(id){
@@ -3233,56 +3227,99 @@ async function cloudCreate(data){
   return m[1];
 }
 
-/* 上传节流：不管 save 触发多少次，最多每 30 秒真正上传一次，避免触发 429 */
-let _lastPushTime=0;
-const PUSH_THROTTLE_MS=30000;
-/* 后台重试队列：pushSync 失败后自动延迟重试，不阻塞 UI */
-let _retryBackoff=0;
-let _retryTimer=null;
-
-/* 上传本机数据到云端（携带当前 blob id，供其他设备跟随）—— 完全非阻塞 */
-function pushSync(silent){
-  /* 节流检查 */
-  const now=Date.now();
-  if(now-_lastPushTime<PUSH_THROTTLE_MS){ if(!silent)toast('同步上传中…'); return; }
-  _lastPushTime=now;
-  /* fire-and-forget：不 await，不阻塞 UI */
-  (async ()=>{
-    try{
-      state._syncBlobId=_activeBlobId;
-      let r=await cloudPut(_activeBlobId,state);
-      if(r.status===404){
-        /* 当前 blob 过期 → 新建并切换 */
-        const nid=await cloudCreate(state);
-        adoptBlobId(nid);
-        if(!silent)toast('已上传同步 ☁️（已重建云端）');
-        _retryBackoff=0;
-        return;
-      }
-      if(r.status===429){
-        /* 429：静默安排后台重试，不打扰用户 */
-        if(!silent)toast('云端繁忙，后台自动重试中 ☁');
-        scheduleRetryPush(silent);
-        return;
-      }
-      if(!r.ok)throw new Error('HTTP '+r.status);
-      if(!silent)toast('已上传同步 ☁️');
-      _retryBackoff=0; /* 成功后重置退避 */
-    }catch(e){
-      if(!silent)toast('上传失败：'+e.message);
-      scheduleRetryPush(silent);
-    }
-  })();
+/* ===== 上传 / 合并 / 同步（稳健版） =====
+   设计原则：
+   1) 本地 localStorage 永远先写（刷新不丢）；
+   2) 推送前先拉云端与本机合并再上传 → 绝不覆盖另一端的数据；
+   3) 云端请求失败时绝不把空种子推上去覆盖真实数据；
+   4) 离开页面/切后台时立即 flush，确保最后一次改动落到云端。 */
+let _pendingPush=false;
+const ARR_KEYS=['tasks','ideas','verified','posts','reading','plans','learning','moods','favorites'];
+const OBJ_KEYS=['dailyLog','weekPlan','dailyEats','mealPick','fridge'];
+function isSeedTask(x){ return x&&x.name&&SEED_TASKS.includes(x.name); }
+/* 判断一份状态是否含有「真实用户数据」（用于防止空种子覆盖云端） */
+function hasRealData(s){
+  if(!s||typeof s!=='object')return false;
+  if(ARR_KEYS.some(k=>Array.isArray(s[k])&&s[k].length)) return true;
+  if(OBJ_KEYS.some(k=>s[k]&&typeof s[k]==='object'&&Object.keys(s[k]).length)) return true;
+  return false;
 }
-/* 安排后台延迟重试（指数退避：5s→10s→20s→40s→最大60s） */
-function scheduleRetryPush(silent){
-  if(_retryTimer)clearTimeout(_retryTimer);
-  _retryBackoff=Math.min((_retryBackoff||5000)*2,60000);
-  _retryTimer=setTimeout(()=>{
-    _retryTimer=null;
-    _lastPushTime=0; /* 重置节流，允许立即重试 */
-    pushSync(true); /* 静默重试 */
-  },_retryBackoff);
+/* 手动「上传同步」按钮：立即把本机合并后推上去 */
+function pushSync(){ _booted=true; flushSync(); }
+/* 合并：本机(state) + 云端(remote) → 绝不丢失任何一方
+   - 数组：按 id 并集（剔除种子占位任务，避免重复计划）
+   - 对象(按 key，如 dailyLog/weekPlan)：按 key 深合并
+   - settings：本机优先 */
+function mergeRemote(remote){
+  const local=state;
+  const out=JSON.parse(JSON.stringify(remote));
+  for(const k of ARR_KEYS){
+    if(Array.isArray(remote[k])&&Array.isArray(local[k])){
+      const map=new Map();
+      local[k].forEach(x=>{ if(x&&x.id && !(k==='tasks'&&isSeedTask(x))) map.set(x.id,x); });
+      remote[k].forEach(x=>{ if(x&&x.id) map.set(x.id,x); });
+      out[k]=[...map.values()];
+    }
+  }
+  for(const k of OBJ_KEYS){
+    if(remote[k]&&typeof remote[k]==='object'&&local[k]&&typeof local[k]==='object'){
+      const merged={};
+      const keys=new Set([...Object.keys(remote[k]),...Object.keys(local[k])]);
+      for(const key of keys){
+        const rv=remote[k][key], lv=local[k][key];
+        if(rv&&lv&&typeof rv==='object'&&typeof lv==='object'&&!Array.isArray(rv)&&!Array.isArray(lv)) merged[key]=Object.assign({},rv,lv);
+        else merged[key]=(lv!==undefined&&lv!==null)?lv:rv;
+      }
+      out[k]=merged;
+    }
+  }
+  out.settings=local.settings||remote.settings;
+  out._syncBlobId=_activeBlobId;
+  out.lastModified=Math.max(remote.lastModified||0, local.lastModified||0);
+  out._seeded=false;
+  return out;
+}
+/* 推送：先拉云端合并再上传，绝不覆盖其他设备的改动 */
+async function doPush(){
+  _pendingPush=false;
+  try{
+    const res=await cloudGet(_activeBlobId);
+    /* 读不到云端（限流/网络错误）→ 绝不把本机（可能是空种子）推上去覆盖真实数据，稍后重试 */
+    if(!res.ok){ _pendingPush=true; schedulePush(); return; }
+    if(res.status===404){
+      /* 云端确实为空 → 安全用本机初始化（不会覆盖任何真实数据） */
+      const nid=await cloudCreate(state); adoptBlobId(nid); return;
+    }
+    let toPush=state;
+    const cloudHas=hasRealData(res.obj);
+    const localHas=hasRealData(state);
+    if(cloudHas && !localHas) return; /* 云端有数据而本机只是空种子 → 绝不覆盖云端 */
+    if(cloudHas){
+      const merged=mergeRemote(res.obj);
+      if(JSON.stringify(merged)!==JSON.stringify(state)){ state=merged; persistLocal(); lastLocalSave=Date.now(); fullRender(); }
+      toPush=state;
+    }
+    toPush._syncBlobId=_activeBlobId;
+    let r=await cloudPut(_activeBlobId,toPush);
+    if(r.status===404){ const nid=await cloudCreate(toPush); adoptBlobId(nid); return; }
+    if(r.status===429){ _pendingPush=true; schedulePush(); return; }
+    if(!r.ok) throw new Error('HTTP '+r.status);
+  }catch(e){ _pendingPush=true; schedulePush(); }
+}
+function schedulePush(){
+  if(_pendingPush) return;
+  if(!state||!state.settings||!state.settings.autoSync||!syncReady()) return;
+  if(!_booted) return;          /* 启动完成前不推送（避免首屏空种子覆盖云端） */
+  _pendingPush=true;
+  if(_pushTimer) return;        /* 防抖：1.2 秒内多次改动只推一次 */
+  _pushTimer=setTimeout(()=>{ _pushTimer=null; doPush(); }, 1200);
+}
+/* 离开页面 / 切后台时立即把待推送内容发到云端，确保最后一次改动不丢 */
+function flushSync(){ if(_pendingPush){ _pushTimer=null; doPush(); } }
+if(typeof window!=='undefined'){
+  window.addEventListener('beforeunload', flushSync);
+  document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') flushSync(); });
+  window.addEventListener('pagehide', flushSync);
 }
 
 /* 智能合并：云端为跨设备唯一真相源。
@@ -3320,13 +3357,9 @@ function mergeRemote(remote){
 async function doPull(silent){
   if(!state||!state.settings)return;
   const res=await cloudGet(_activeBlobId);
-  if(res.status===429){
-    /* 静默模式下不弹提示，避免打扰用户 */
-    if(!silent)toast('云端繁忙，稍后自动重试 ☁️');
-    return;
-  }
+  if(res.status===429){ if(!silent)toast('云端繁忙，稍后自动重试 ☁️'); return; }
   if(res.status===404){
-    /* 当前 blob 过期/不存在：先尝试本机记录过的其他设备 blob，否则用本机数据初始化云端 */
+    /* 当前 blob 过期/不存在：先尝试本机记录过的其他设备 blob */
     let recovered=false;
     try{
       const cand=localStorage.getItem('wb_blob_id');
@@ -3336,10 +3369,7 @@ async function doPull(silent){
       }
     }catch(e){}
     if(recovered) return doPull(silent);
-    if((state.tasks||[]).length||(state.favorites||[]).length||(state.ideas||[]).length){
-      await pushSync(true);
-      if(!silent)toast('已用本机数据初始化云端 ☁️');
-    }
+    if(hasRealData(state)){ await doPush(); if(!silent)toast('已用本机数据初始化云端 ☁️'); }
     return;
   }
   if(!res.ok){ if(!silent&&res.status!==429)toast('下载失败：HTTP '+res.status); return; }
@@ -3347,13 +3377,11 @@ async function doPull(silent){
   if(!obj||typeof obj!=='object')return;
   /* 其他设备已迁移到新 blob → 跟随，保证大家指向同一份数据 */
   if(obj._syncBlobId && obj._syncBlobId!==_activeBlobId) adoptBlobId(obj._syncBlobId);
-  const remoteHas=((obj.tasks||[]).length||(obj.favorites||[]).length||(obj.ideas||[]).length);
-  if(!remoteHas){ if(!silent)toast('云端暂无数据，已保留本机'); return; }
+  if(!hasRealData(obj)){ if(!silent)toast('云端暂无数据，已保留本机'); return; }
   const merged=mergeRemote(obj);
-  const changed=JSON.stringify(merged)!==JSON.stringify(state);
-  migrate(merged); state=merged; save(); /* save 会触发 push，把合并结果回写云端 */
-  if(changed){ fullRender(); if(!silent)toast('已下载同步 ☁️'); }
-  else if(!silent)toast('已是最新 ☁️');
+  if(JSON.stringify(merged)===JSON.stringify(state)){ if(!silent)toast('已是最新 ☁️'); return; }
+  state=merged; persistLocal(); fullRender();
+  if(!silent)toast('已下载同步 ☁️');
 }
 
 async function pullSync(){ return doPull(false); }
@@ -3403,28 +3431,20 @@ function stateSig(s){
   ].join('|');
 }
 async function silentPull(){
-  if(Date.now()-lastLocalSave<10000)return; // 本地刚改动，先不覆盖（放宽到10秒）
-  /* fire-and-forget：不阻塞主线程 */
-  (async ()=>{
-    try{
-      const res=await cloudGet(_activeBlobId);
-      if(!res.ok||res.status===404||res.status===429)return; // 云端不可用，等下次
-      const obj=res.obj;
-      if(!obj||!obj.tasks){pushSync(true);return;} // 云端空：本机推上去
-      const localTasks=(state.tasks||[]).length;
-      const remoteTasks=(obj.tasks||[]).length;
-      /* 智能合并：绝不盲目覆盖本机 */
-      if(remoteTasks===0 && localTasks>0){ pushSync(true); return; }
-      if(localTasks===0 && remoteTasks>0){ migrate(obj);state=obj;save();fullRender();return; }
-      if((obj.lastModified||0) <= (state.lastModified||0)){ pushSync(true); return; }
-      if(stateSig(obj)===stateSig(state))return; // 没变化就不动
-      migrate(obj);state=obj;save();fullRender();
-      if(document.getElementById('view-insight')&&document.getElementById('view-insight').classList.contains('active')){
-        renderDailySummary();renderStats();renderHistoryChips();renderHistory(document.getElementById('histDate').value||todayStr());
-      }
-      if(openChatId)toggleChat(openChatId);
-    }catch(e){}
-  })();
+  if(Date.now()-lastLocalSave<8000)return; // 本地 8 秒内刚改过，先不拉，避免冲突
+  try{
+    const res=await cloudGet(_activeBlobId);
+    if(!res.ok||res.status===404||res.status===429)return; // 云端不可用，等下次
+    const obj=res.obj; if(!obj) return;
+    if(!hasRealData(obj)) return; // 云端空：不碰本机
+    const merged=mergeRemote(obj);
+    if(JSON.stringify(merged)===JSON.stringify(state)) return; // 没变化就不动
+    state=merged; persistLocal(); fullRender();
+    if(document.getElementById('view-insight')&&document.getElementById('view-insight').classList.contains('active')){
+      renderDailySummary();renderStats();renderHistoryChips();renderHistory(document.getElementById('histDate').value||todayStr());
+    }
+    if(openChatId)toggleChat(openChatId);
+  }catch(e){}
 }
 
 /* ---------- history (每日回顾) ---------- */
@@ -3561,13 +3581,16 @@ async function bootPull(firstLoad){
     adoptBlobId(res.obj._syncBlobId); res=await cloudGet(_activeBlobId);
   }
   const obj=(res.ok&&res.obj)?res.obj:null;
-  const remoteHas=obj&&(((obj.tasks||[]).length)||(obj.favorites||[]).length||(obj.ideas||[]).length||(obj.verified||[]).length||Object.keys(obj.dailyLog||{}).length);
   if(firstLoad){
-    if(obj){ migrate(obj); obj._seeded=false; state=obj; /* 采用云端，不 seed、不合并 → 无重复、无丢失 */ }
-    else { state=initState(); applyPreset(); pushSync(true); /* 云端空 → 本地 seed 并初始化云端 */ }
+    if(obj){ migrate(obj); obj._seeded=false; state=obj; /* 云端有数据 → 直接采用（含用户数据） */ }
+    else {
+      /* 云端空 / 请求失败：仅本地 seed，绝不把空种子推到云端覆盖真实数据！
+         等用户产生真实数据后，save() 会经由 doPush（带保护）上传。 */
+      state=initState(); applyPreset();
+    }
   }else{
-    if(obj){ state=mergeRemote(obj); /* 本地已有数据：智能合并（已剔除种子占位） */ }
-    else { pushSync(true); /* 云端空 → 本机推上去 */ }
+    if(obj){ state=mergeRemote(obj); persistLocal(); /* 本地已有数据：合并云端，不丢失 */ }
+    /* 云端空/失败：保留本机数据，正常改动时再由 doPush 上传 */
   }
 }
 function bootSync(){
@@ -3576,14 +3599,15 @@ function bootSync(){
   if(state&&state.settings.hotspotUrl) fetchHotspots(true);
   /* 永远先从云端拉取；完成后再开启实时同步（每 30 秒） */
   bootPull(firstLoad).catch(e=>{ console.error('云端拉取失败（本机照常可用）:',e); }).finally(()=>{
-    if(firstLoad && !state){ state=initState(); }
-    applyPreset();
+    if(firstLoad && !state){ state=initState(); applyPreset(); }
     _booted=true;
-    save(); /* 此时 push 安全：状态已是云端/合并结果，或离线 seed */
+    persistLocal(); /* 只写本地，不主动推送（doPush 有保护，不会用空种子覆盖云端） */
     fullRender();
     if(state){ const hd=document.getElementById('histDate'); if(hd){hd.value=todayStr();renderHistoryChips();renderHistory(todayStr());} }
-    /* 实时同步：手机/电脑任一端改动并保存后，另一端最多 30 秒内自动看到 */
+    /* 实时同步：每 30 秒静默拉取合并；任一端改动后，另一端最多 30 秒内自动看到 */
     setInterval(()=>{ try{ silentPull(); }catch(e){} },30000);
+    /* 启动后补一次上传：若本机有真实数据而云端旧/空，把它合并上去 */
+    if(hasRealData(state)) schedulePush();
   });
 }
 /* 无论如何先把页面渲染出来（导航/数据永远可用），同步在后台进行 */
