@@ -3210,19 +3210,29 @@ let ghSha=null;            // 云端 data.json 当前 sha（用于正确提交 /
 let _ghLastSig=null;      // 上次成功写入云端的签名，避免无变化空提交
 let _syncStarted=false;   // 实时轮询是否已启动（防止重复 setInterval）
 let _lastSyncOk=null, _lastSyncMsg='', _lastSyncAt=0;  // 诊断：最近一次同步结果
+let _lastPushAt=0;         // 上次成功推送到云端的时间戳（区分读取≠写入）
 
 function apiBase(){ return (SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github).api; }
 function authScheme(){ return (SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github).scheme; }
 function syncReady(){ return !!ghToken; }
 function saveGhCreds(){ try{localStorage.setItem('wb_gh_token',ghToken);localStorage.setItem('wb_gh_owner',ghOwner);localStorage.setItem('wb_gh_repo',ghRepo);localStorage.setItem('wb_sync_backend',syncBackend);}catch(e){} }
 
-/* 诊断：把最近一次同步结果显示到页面底部，不再「悄悄失败」 */
-function syncDiag(ok,msg,status){
-  _lastSyncOk=ok; _lastSyncMsg=msg||''; if(ok)_lastSyncAt=Date.now();
+/* 诊断：把最近一次同步结果显示到页面底部，不再「悄悄失败」
+   ok=true 时区分「读取成功」和「写入成功」——之前两者都显示"已同步"，导致用户误以为操作已上传 */
+function syncDiag(ok,msg,status,isWrite){
+  _lastSyncOk=ok; _lastSyncMsg=msg||''; if(ok&&!isWrite)_lastSyncAt=Date.now();
+  if(ok&&isWrite) _lastPushAt=Date.now(); /* 写入成功：记录推送时间 */
   let el=document.getElementById('__syncDiag');
   if(!el){ el=document.createElement('div'); el.id='__syncDiag'; el.style.cssText='position:fixed;left:0;right:0;bottom:0;padding:6px 12px;font-size:12px;z-index:9997;text-align:center;color:#fff;background:rgba(0,0,0,.72)'; document.body.appendChild(el); }
   let txt, bg;
-  if(ok){ txt='☁️ 已同步 · 最近 '+(new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}))+'（'+(SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github).label+'）'; bg='rgba(31,138,31,.85)'; }
+  if(ok){
+    const pushTime = _lastPushAt ? new Date(_lastPushAt).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}) : '--:--';
+    if(isWrite){
+      txt='☁️ 已推送 · '+pushTime+'（'+(SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github).label+'）'; bg='rgba(21,128,61,.9)';
+    } else {
+      txt='☁️ 已连接 · 最后推送 '+pushTime+'（'+(SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github).label+'）'; bg='rgba(31,138,31,.85)';
+    }
+  }
   else { txt='☁️ 同步未成功：'+(msg||('HTTP '+(status||'?')))+' · 多为网络受限（到设置把后端换成 Gitee 即可）'; bg='rgba(192,57,43,.9)'; }
   el.textContent=txt; el.style.background=bg;
 }
@@ -3290,7 +3300,7 @@ async function cloudPut(data){
     if(!r.ok){ syncDiag(false,'写入失败 HTTP '+r.status,r.status); return {ok:false,status:r.status}; }
     try{ const j=await r.json(); ghSha=j.content?j.content.sha:ghSha; }catch(e){}
     _ghLastSig=stateSig(data);
-    syncDiag(true);
+    syncDiag(true,null,null,true); /* 写入成功：显示"已推送"而非"已连接" */
     return {ok:true,status:200};
   }
   syncDiag(false,'冲突重试失败',409);
@@ -3442,10 +3452,10 @@ function mergeRemote(remote, prefer){
 async function doPush(){
   _pendingPush=false;
   if(!syncReady()) return;
-  if(stateSig(state)===_ghLastSig) return; // 无变化不提交，避免空写
+  if(stateSig(state)===_ghLastSig){ console.log('[sync] doPush 跳过: 签名未变（无新改动或 stateSig 漏检字段）'); return; }
   try{
     const res=await cloudGet();
-    if(!res.ok && res.status!==404){ /* 限流/网络错误：稍后重试，绝不覆盖 */ _pendingPush=true; schedulePush(); return; }
+    if(!res.ok && res.status!==404){ /* 限流/网络错误：稍后重试，绝不覆盖 */ syncDiag(false,'推送前读取云端失败 HTTP '+res.status,res.status); _pendingPush=true; schedulePush(); return; }
     let toPush=state;
     if(res.ok && res.obj){
       const cloudHas=hasRealData(res.obj), localHas=hasRealData(state);
@@ -3455,10 +3465,10 @@ async function doPush(){
       toPush=state;
     }
     const r=await cloudPut(toPush);
-    if(r.status===401){ toast('GitHub Token 无效，请到设置重新填写 ☁️'); return; }
-    if(r.status===403){ _pendingPush=true; schedulePush(); return; }
-    if(!r.ok && r.status!==404){ _pendingPush=true; schedulePush(); }
-  }catch(e){ _pendingPush=true; schedulePush(); }
+    if(r.status===401){ syncDiag(false,'Token 无效或无权限',401); toast('Token 无效，请到设置重新填写 ☁️'); return; }
+    if(r.status===403){ syncDiag(false,'云端繁忙(403)，稍后自动重试',403); _pendingPush=true; schedulePush(); return; }
+    if(!r.ok && r.status!==404){ syncDiag(false,'写入失败 HTTP '+r.status,r.status); _pendingPush=true; schedulePush(); }
+  }catch(e){ syncDiag(false,'推送异常:'+e.message,-1); _pendingPush=true; schedulePush(); }
 }
 function schedulePush(){
   if(_pendingPush) return;
