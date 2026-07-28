@@ -3202,9 +3202,11 @@ const SYNC_BACKENDS={
   gitee:{ label:'Gitee 码云（国内·微信可用）', api:'https://gitee.com/api/v5', scheme:'token', repo:'workbench-sync' }
 };
 const GH_FILE='data.json';
-let syncBackend=localStorage.getItem('wb_sync_backend')||'github';
-let ghToken=localStorage.getItem('wb_gh_token')||'';
-let ghOwner=localStorage.getItem('wb_gh_owner')||'chenxiaoju-carlo';
+/* 默认同步配置（硬编码兜底）：即使用户打开的是干净 URL（不带 #t= 参数、localStorage 为空），
+   也自动用 Gitee 开启同步，实现「打开即用、零配置」。URL #t= 参数和 localStorage 仍可覆盖此默认值。 */
+let syncBackend=localStorage.getItem('wb_sync_backend')||'gitee';
+let ghToken=localStorage.getItem('wb_gh_token')||'3cabf15b7176c1908c56c09b330ce76d';
+let ghOwner=localStorage.getItem('wb_gh_owner')||'chenxiaojuu';
 let ghRepo=localStorage.getItem('wb_gh_repo')|| SYNC_BACKENDS[syncBackend].repo;
 let ghSha=null;            // 云端 data.json 当前 sha（用于正确提交 / 检测变化）
 let _ghLastSig=null;      // 上次成功写入云端的签名，避免无变化空提交
