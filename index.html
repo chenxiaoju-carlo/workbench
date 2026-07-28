@@ -3256,11 +3256,17 @@ async function cloudGet(){
     if(r.status===404) return {ok:false,status:404};
     if(!r.ok){ syncDiag(false,'云端返回 '+r.status+'（'+(syncBackend==='github'?'GitHub 在大陆常被墙，请到设置换成 Gitee':'读取失败')+'）',r.status); return {ok:false,status:r.status}; }
     const j=await r.json();
+    /* Gitee 语义差异：文件不存在时返回空数组 []（HTTP 200），或 content 为 null；
+       GitHub 不存在则已在上方按 404 处理。这里把「无 content」统一视为云端无此文件。 */
+    let content=null, sha=null;
+    if(Array.isArray(j)){ /* Gitee：文件不存在 */ }
+    else if(j && j.content){ content=j.content; sha=j.sha; }
+    if(!content){ ghSha=null; return {ok:false,status:404}; }
     let obj=null;
-    try{ obj=JSON.parse(b64decodeUtf8(j.content)); }catch(e){ return {ok:false,status:500}; }
-    ghSha=j.sha;
+    try{ obj=JSON.parse(b64decodeUtf8(content)); }catch(e){ return {ok:false,status:500}; }
+    ghSha=sha;
     syncDiag(true);
-    return {ok:true,obj,sha:j.sha,status:200};
+    return {ok:true,obj,sha,status:200};
   }catch(e){ syncDiag(false,'网络/跨域被拦截（GitHub 在大陆常被墙，请在设置换成 Gitee）',-1); return {ok:false,status:-1}; }
 }
 /* 推送 data.json（带冲突重试 409：别人先写则重拉合并再试，最终一致） */
@@ -3268,13 +3274,16 @@ async function cloudPut(data){
   if(!syncReady()) return {ok:false,status:401};
   for(let attempt=0;attempt<6;attempt++){
     const body={message:'workbench sync '+new Date().toISOString(),content:b64encodeUtf8(JSON.stringify(data))};
+    let method='PUT';
     if(ghSha) body.sha=ghSha;
+    else if(syncBackend==='gitee') method='POST'; /* Gitee 创建新文件用 POST（不带 sha），更新才用 PUT+sha */
     let r;
-    try{ r=await ghApi(ghPath(),{method:'PUT',body:JSON.stringify(body)}); }
+    try{ r=await ghApi(ghPath(),{method,body:JSON.stringify(body)}); }
     catch(e){ r={status:-1}; }
-    if(r.status===409){
+    /* 冲突(409) / Gitee 的 sha 失效(400)：重拉云端合并再试，最终一致，不丢任一方数据 */
+    if(r.status===409 || (syncBackend==='gitee' && r.status===400)){
       const cur=await cloudGet();
-      if(cur.ok){ data=mergeRemote(cur.obj); state=data; persistLocal(); fullRender(); }
+      if(cur.ok){ data=mergeRemote(cur.obj,'local'); state=data; persistLocal(); fullRender(); }
       continue;
     }
     if(r.status===401){ syncDiag(false,'Token 无效或无权限（需仓库 Contents 读写）',401); return {ok:false,status:401}; }
@@ -3294,7 +3303,9 @@ async function saveGhSync(){
   syncBackend=document.getElementById('setSyncBackend').value||'github';
   var bk=SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github;
   ghRepo=document.getElementById('setGhRepo').value.trim()|| bk.repo;
-  ghOwner=document.getElementById('setGhOwner').value.trim()||'chenxiaoju-carlo';
+  ghOwner=document.getElementById('setGhOwner').value.trim();
+  if(syncBackend==='gitee' && !ghOwner){ el.textContent='⚠️ Gitee 请填写你的用户名（仓库所有者）'; el.style.color='#c0392b'; return; }
+  if(!ghOwner) ghOwner='chenxiaoju-carlo';
   const el=document.getElementById('ghSyncStatus');
   if(!ghToken){ el.textContent='⚠️ 请先填写 Token'; el.style.color='#c0392b'; return; }
   saveGhCreds();
@@ -3315,7 +3326,8 @@ async function testGhSync(){
   syncBackend=document.getElementById('setSyncBackend').value||'github';
   var bk=SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github;
   ghRepo=document.getElementById('setGhRepo').value.trim()|| bk.repo;
-  ghOwner=document.getElementById('setGhOwner').value.trim()||'chenxiaoju-carlo';
+  ghOwner=document.getElementById('setGhOwner').value.trim();
+  if(!ghOwner) ghOwner='chenxiaoju-carlo';
   const el=document.getElementById('ghSyncStatus');
   if(!ghToken){ el.textContent='⚠️ 请先填写 Token'; el.style.color='#c0392b'; return; }
   const res=await cloudGet();
@@ -3360,21 +3372,25 @@ function hasRealData(s){
 }
 /* 手动「上传同步」按钮：立即把本机合并后推上去 */
 function pushSync(){ _booted=true; flushSync(); }
-/* 数组合并辅助：把本地对象 l 合并进远端基线 r，本地字段优先（含 done=true 不被云端 done=false 覆盖），
+/* 数组合并辅助：把本地对象 l 合并进远端基线 r。
+   prefer='local'（推送方向）：本地字段优先（刚勾选的 done=true 不被云端旧 done=false 覆盖）；
+   prefer='remote'（拉取方向）：云端字段优先（云端是新真相，避免用本机旧值把另一端的新操作覆盖回去）。
    嵌套对象/数组递归深合并，绝不整体互覆盖。 */
-function deepMergeItem(r, l){
+function deepMergeItem(r, l, prefer){
   const out=JSON.parse(JSON.stringify(r));
   for(const key in l){
     const lv=l[key], rv=r[key];
     if(Array.isArray(lv)&&Array.isArray(rv)){
       const m=new Map();
-      rv.forEach(it=>{ if(it&&it.id) m.set(it.id,it); });
-      lv.forEach(it=>{ if(it&&it.id) m.set(it.id,it); else m.set('_'+Math.random(),it); });
+      rv.forEach(it=>{ if(it&&it.id) m.set(it.id, JSON.parse(JSON.stringify(it))); });
+      lv.forEach(it=>{ if(it&&it.id){ const b=m.get(it.id); m.set(it.id, b?deepMergeItem(b,it,prefer):JSON.parse(JSON.stringify(it))); } else m.set('_'+Math.random(), JSON.parse(JSON.stringify(it))); });
       out[key]=[...m.values()];
     } else if(lv&&typeof lv==='object'&&!Array.isArray(lv)&&rv&&typeof rv==='object'&&!Array.isArray(rv)){
-      out[key]=deepMergeItem(rv, lv);
+      out[key]=deepMergeItem(rv, lv, prefer);
     } else {
-      out[key]=(lv!==undefined&&lv!==null&&lv!=='')?lv:rv; /* 本地有值优先 */
+      out[key]=(prefer==='remote')
+        ? ((rv!==undefined&&rv!==null&&rv!=='')?rv:lv)
+        : ((lv!==undefined&&lv!==null&&lv!=='')?lv:rv);
     }
   }
   return out;
@@ -3384,7 +3400,8 @@ function deepMergeItem(r, l){
      因此刚勾选的 done=true 不会被云端旧值 done=false 覆盖（根治打卡勾选后退回去）
    - 对象(按 key，如 dailyLog/weekPlan)：按 key 深合并
    - settings：本机优先 */
-function mergeRemote(remote){
+function mergeRemote(remote, prefer){
+  prefer=prefer||'local'; /* doPush 用 'local'（本地刚操作优先）；doPull 用 'remote'（云端为新真相） */
   const local=(state&&typeof state==='object')?state:{};
   const out=JSON.parse(JSON.stringify(remote));
   for(const k of ARR_KEYS){
@@ -3395,7 +3412,7 @@ function mergeRemote(remote){
         if(!x||!x.id) return;
         if(k==='tasks'&&isSeedTask(x)&&byId.has(x.id)) return; /* 跳过种子占位，避免重复计划 */
         const base=byId.get(x.id);
-        byId.set(x.id, base?deepMergeItem(base,x):JSON.parse(JSON.stringify(x)));
+        byId.set(x.id, base?deepMergeItem(base,x,prefer):JSON.parse(JSON.stringify(x)));
       });
       out[k]=[...byId.values()];
     }
@@ -3407,7 +3424,7 @@ function mergeRemote(remote){
       for(const key of keys){
         const rv=remote[k][key], lv=local[k][key];
         if(rv&&lv&&typeof rv==='object'&&typeof lv==='object'&&!Array.isArray(rv)&&!Array.isArray(lv)) merged[key]=Object.assign({},rv,lv);
-        else merged[key]=(lv!==undefined&&lv!==null)?lv:rv;
+        else merged[key]=(prefer==='remote')?((rv!==undefined&&rv!==null)?rv:lv):((lv!==undefined&&lv!==null)?lv:rv);
       }
       out[k]=merged;
     }
@@ -3429,7 +3446,7 @@ async function doPush(){
     if(res.ok && res.obj){
       const cloudHas=hasRealData(res.obj), localHas=hasRealData(state);
       if(cloudHas && !localHas) return; /* 云端有数据而本机只是空种子 → 不覆盖云端 */
-      const merged=mergeRemote(res.obj);
+      const merged=mergeRemote(res.obj,'local');
       if(JSON.stringify(merged)!==JSON.stringify(state)){ state=merged; persistLocal(); lastLocalSave=Date.now(); fullRender(); }
       toPush=state;
     }
@@ -3470,7 +3487,7 @@ async function doPull(silent){
   }
   const obj=res.obj; if(!obj||typeof obj!=='object') return;
   if(!hasRealData(obj)){ if(!silent)toast('云端暂无数据，已保留本机'); return; }
-  const merged=mergeRemote(obj);
+  const merged=mergeRemote(obj,'remote');
   if(stateSig(merged)===stateSig(state)){ if(!silent)toast('已是最新 ☁️'); return; }
   state=merged; persistLocal(); fullRender();
   try{
@@ -3663,7 +3680,7 @@ async function bootPull(firstLoad){
   if(syncReady()){
     const res=await cloudGet();
     if(res.ok && res.obj){
-      state=mergeRemote(res.obj); migrate(state); /* 云端有数据：合并本机后采用，两端都不丢 */
+      state=mergeRemote(res.obj,'remote'); migrate(state); /* 云端有数据：云端优先合并本机，两端都不丢 */
     } else if(res.status===404){
       /* 云端尚无文件：本机有真实数据则保留（稍后上传初始化），否则才 seed */
       if(!hasRealData(state)){ state=initState(); applyPreset(); }
@@ -3694,6 +3711,8 @@ try{
   const _h=(typeof location!=='undefined'&&location&&location.hash)||'';
   const _s=_h.match(/[#&]s=(github|gitee)/);
   if(_s){ syncBackend=_s[1]; }
+  const _o=_h.match(/[#&]o=([^&]+)/);
+  if(_o){ ghOwner=decodeURIComponent(_o[1]); }
   const _m=_h.match(/[#&]t=([^&]+)/);
   if(_m){
     const _t=decodeURIComponent(_m[1]);
