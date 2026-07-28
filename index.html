@@ -3419,16 +3419,15 @@ function mergeRemote(remote, prefer){
   for(const k of ARR_KEYS){
     if(Array.isArray(remote[k])&&Array.isArray(local[k])){
       const byId=new Map();
-      remote[k].forEach(x=>{ if(x&&x.id && !(k==='tasks'&&isSeedTask(x))) byId.set(x.id, JSON.parse(JSON.stringify(x))); });
+      const seenNames=new Set();
+      /* 先加入云端数据（含种子任务，必须保留），记录已见 name 用于本地种子去重 */
+      remote[k].forEach(x=>{ if(x&&x.id){ byId.set(x.id, JSON.parse(JSON.stringify(x))); if(x.name) seenNames.add(x.name); } });
       local[k].forEach(x=>{
         if(!x||!x.id) return;
-        if(k==='tasks'&&isSeedTask(x)){
-          /* 跳过种子占位：若云端已有同名种子任务（两端各自初始化导致 id 不同但名字相同），则不重复加入，避免重复计划 */
-          const nameDup=remote[k].some(r=>r&&r.name===x.name);
-          if(nameDup || byId.has(x.id)) return;
-        }
-        const base=byId.get(x.id);
-        byId.set(x.id, base?deepMergeItem(base,x,prefer):JSON.parse(JSON.stringify(x)));
+        if(byId.has(x.id)){ byId.set(x.id, deepMergeItem(byId.get(x.id), x, prefer)); return; }
+        /* 本地种子任务：若云端已有同名种子（两端各自初始化的 id 不同但名字相同），则跳过，避免重复计划；否则保留 */
+        if(k==='tasks'&&isSeedTask(x)&&seenNames.has(x.name)) return;
+        byId.set(x.id, JSON.parse(JSON.stringify(x)));
       });
       out[k]=[...byId.values()];
     }
