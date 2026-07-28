@@ -1461,7 +1461,7 @@ function migrate(d){
   // 兼容旧版热点格式（无 cover 字段则视为旧种子，重置为新格式；热点非用户录入数据）
   if(d.trends.length&&!d.trends[0].cover)d.trends=SEED_TRENDS.map(t=>({...t,id:uid()}));
   d.trendsUpdatedAt=d.trendsUpdatedAt||Date.now();
-  d.tasks=d.tasks||SEED_TASKS.map(n=>({id:uid(),name:n,done:false,chat:[]}));
+  d.tasks=d.tasks&&d.tasks.length?d.tasks:SEED_TASKS.map(n=>({id:uid(),name:n,done:false,chat:[]})); /* 空数组也恢复种子（云端可能因autoSync旧bug从未上传过tasks） */
   d.tasks.forEach(t=>{if(!t.chat)t.chat=[];});
   if(d.tasksDate!==todayStr()){
     const allDone=d.tasks.length>0&&d.tasks.every(t=>t.done);
@@ -3699,9 +3699,17 @@ function applyPreset(){
 /* 启动时：若已配置 Token，先从云端拉取合并（云端为跨设备唯一真相源，且保留本机独有数据）；否则仅本机 */
 async function bootPull(firstLoad){
   if(syncReady()){
+    /* 快照本地状态：防止云端空数据（如旧autoSync bug导致tasks从未上传）覆盖本机真实数据 */
+    const _localSnapshot = state && typeof state==='object' ? JSON.parse(JSON.stringify(state)) : null;
     const res=await cloudGet();
     if(res.ok && res.obj){
       state=mergeRemote(res.obj,'remote'); migrate(state); /* 云端有数据：云端优先合并本机，两端都不丢 */
+      /* 安全网：若合并后关键数组变空但本地原来有数据，恢复本地并标记需立即上传 */
+      if(_localSnapshot && _localSnapshot.tasks && _localSnapshot.tasks.length &&
+         (!state.tasks || !state.tasks.length)){
+        console.log('[sync] bootPull 安全网：云端tasks为空但本地有'+_localSnapshot.tasks.length+'条，恢复本地');
+        state.tasks=_localSnapshot.tasks;
+      }
     } else if(res.status===404){
       /* 云端尚无文件：本机有真实数据则保留（稍后上传初始化），否则才 seed */
       if(!hasRealData(state)){ state=initState(); applyPreset(); }
