@@ -3632,6 +3632,19 @@ function bootSync(){
     if(syncReady()){ startRealtime(); if(hasRealData(state)) schedulePush(); }
   });
 }
+/* 一键配置：若打开的链接带 #t=TOKEN（你专属的配置链接），自动把 Token 存入本机浏览器并开启同步，
+   随后立即清掉地址栏里的 Token，避免它残留在浏览器历史中。仅在本机生效，不会上传。 */
+try{
+  const _h=(typeof location!=='undefined'&&location&&location.hash)||'';
+  const _m=_h.match(/[#&]t=([^&]+)/);
+  if(_m){
+    const _t=decodeURIComponent(_m[1]);
+    if(_t){ ghToken=_t; saveGhCreds();
+      try{ if(history&&history.replaceState) history.replaceState(null,'',(location.pathname||'/')+(location.search||'')); }catch(_){}
+      console.log('已从配置链接自动开启同步');
+    }
+  }
+}catch(e){}
 /* 无论如何先把页面渲染出来（导航/数据永远可用），同步在后台进行 */
 try{ bootSync(); }catch(e){ console.error('初始化出错，已强制渲染页面:',e); if(!state)state=initState(); applyPreset(); fullRender(); if(state){const hd=document.getElementById('histDate'); if(hd){hd.value=todayStr();renderHistoryChips();renderHistory(todayStr());}} }
 /* 每日回顾：默认今天（首次加载 state 可能尚未拉取云端，此处跳过，交由 bootSync 渲染） */
