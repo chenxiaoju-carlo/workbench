@@ -3410,7 +3410,11 @@ function mergeRemote(remote, prefer){
       remote[k].forEach(x=>{ if(x&&x.id && !(k==='tasks'&&isSeedTask(x))) byId.set(x.id, JSON.parse(JSON.stringify(x))); });
       local[k].forEach(x=>{
         if(!x||!x.id) return;
-        if(k==='tasks'&&isSeedTask(x)&&byId.has(x.id)) return; /* 跳过种子占位，避免重复计划 */
+        if(k==='tasks'&&isSeedTask(x)){
+          /* 跳过种子占位：若云端已有同名种子任务（两端各自初始化导致 id 不同但名字相同），则不重复加入，避免重复计划 */
+          const nameDup=remote[k].some(r=>r&&r.name===x.name);
+          if(nameDup || byId.has(x.id)) return;
+        }
         const base=byId.get(x.id);
         byId.set(x.id, base?deepMergeItem(base,x,prefer):JSON.parse(JSON.stringify(x)));
       });
