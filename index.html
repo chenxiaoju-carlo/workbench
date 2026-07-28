@@ -848,8 +848,13 @@
     <div class="grp">
       <label>☁️ 手机↔电脑 实时同步（GitHub 私有仓库，永久不丢）</label>
       <div class="hint" style="margin-bottom:8px">数据存到你自己的 GitHub 私有仓库 <b>workbench-sync</b>（永久保存、不会过期删除）。手机和电脑各粘贴一次下方 Token 即可自动实时同步，任一端改动最多 12 秒同步到另一端。Token 仅存在本机浏览器，不会上传、也不会写进网页。</div>
-      <label>GitHub Token（建议用「细粒度 Token」仅授权 workbench-sync 仓库的 Contents 读+写）</label>
-      <input id="setGhToken" type="password" placeholder="ghp_... 或 github_pat_..." />
+      <label>同步后端（大陆 / 微信内置浏览器请用 Gitee 码云）</label>
+      <select id="setSyncBackend">
+        <option value="github">GitHub（国际，可能被墙）</option>
+        <option value="gitee">Gitee 码云（国内，微信/大陆可用）</option>
+      </select>
+      <label style="margin-top:8px">Token（建议仅授权 workbench-sync 仓库的 Contents 读+写）</label>
+      <input id="setGhToken" type="password" placeholder="GitHub: ghp_...  /  Gitee: 私人令牌" />
       <div class="row" style="margin-top:8px">
         <button type="button" class="btn" style="flex:1" onclick="saveGhSync()">💾 保存并开启同步</button>
         <button type="button" class="btn ghost" style="flex:1" onclick="testGhSync()">🔍 测试连接</button>
@@ -3148,7 +3153,7 @@ function openSettings(){
     const set=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v||'';};
     set('setPersona',s.persona);set('setLlmBase',s.llmBase);set('setLlmModel',s.llmModel);set('setLlmKey',s.llmKey);
     set('setHotspotUrl',s.hotspotUrl);
-    set('setGhToken',ghToken); set('setGhOwner',ghOwner); set('setGhRepo',ghRepo);
+    set('setGhToken',ghToken); set('setGhOwner',ghOwner); set('setGhRepo',ghRepo); set('setSyncBackend',syncBackend);
     const autoEl=document.getElementById('setAutoSync');if(autoEl)autoEl.checked=!!s.autoSync;
     const mask=document.getElementById('settingsMask');
     if(mask)mask.classList.add('show');
@@ -3191,24 +3196,43 @@ async function testLLM(){
  * 原则：以后无论怎么优化任意模块，都不要改 doPush/mergeRemote/bootPull/silentPull/
  *       cloudGet/cloudPut 这些同步核心，否则会再次破坏手机↔电脑同步与数据不丢。
  * =========================================================================== */
-const GH_API='https://api.github.com';
+/* 可切换后端：github（国际，大陆/微信常被墙）→ gitee（国内码云，大陆直连、CORS 放行） */
+const SYNC_BACKENDS={
+  github:{ label:'GitHub', api:'https://api.github.com', scheme:'Bearer', repo:'workbench-sync' },
+  gitee:{ label:'Gitee 码云（国内·微信可用）', api:'https://gitee.com/api/v5', scheme:'token', repo:'workbench-sync' }
+};
 const GH_FILE='data.json';
+let syncBackend=localStorage.getItem('wb_sync_backend')||'github';
 let ghToken=localStorage.getItem('wb_gh_token')||'';
 let ghOwner=localStorage.getItem('wb_gh_owner')||'chenxiaoju-carlo';
-let ghRepo=localStorage.getItem('wb_gh_repo')||'workbench-sync';
+let ghRepo=localStorage.getItem('wb_gh_repo')|| SYNC_BACKENDS[syncBackend].repo;
 let ghSha=null;            // 云端 data.json 当前 sha（用于正确提交 / 检测变化）
 let _ghLastSig=null;      // 上次成功写入云端的签名，避免无变化空提交
 let _syncStarted=false;   // 实时轮询是否已启动（防止重复 setInterval）
+let _lastSyncOk=null, _lastSyncMsg='', _lastSyncAt=0;  // 诊断：最近一次同步结果
 
+function apiBase(){ return (SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github).api; }
+function authScheme(){ return (SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github).scheme; }
 function syncReady(){ return !!ghToken; }
-function saveGhCreds(){ try{localStorage.setItem('wb_gh_token',ghToken);localStorage.setItem('wb_gh_owner',ghOwner);localStorage.setItem('wb_gh_repo',ghRepo);}catch(e){} }
+function saveGhCreds(){ try{localStorage.setItem('wb_gh_token',ghToken);localStorage.setItem('wb_gh_owner',ghOwner);localStorage.setItem('wb_gh_repo',ghRepo);localStorage.setItem('wb_sync_backend',syncBackend);}catch(e){} }
+
+/* 诊断：把最近一次同步结果显示到页面底部，不再「悄悄失败」 */
+function syncDiag(ok,msg,status){
+  _lastSyncOk=ok; _lastSyncMsg=msg||''; if(ok)_lastSyncAt=Date.now();
+  let el=document.getElementById('__syncDiag');
+  if(!el){ el=document.createElement('div'); el.id='__syncDiag'; el.style.cssText='position:fixed;left:0;right:0;bottom:0;padding:6px 12px;font-size:12px;z-index:9997;text-align:center;color:#fff;background:rgba(0,0,0,.72)'; document.body.appendChild(el); }
+  let txt, bg;
+  if(ok){ txt='☁️ 已同步 · 最近 '+(new Date().toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'}))+'（'+(SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github).label+'）'; bg='rgba(31,138,31,.85)'; }
+  else { txt='☁️ 同步未成功：'+(msg||('HTTP '+(status||'?')))+' · 多为网络受限（到设置把后端换成 Gitee 即可）'; bg='rgba(192,57,43,.9)'; }
+  el.textContent=txt; el.style.background=bg;
+}
 
 async function ghApi(path,opts={}){
-  const headers={'Accept':'application/vnd.github+json','User-Agent':'workbench'};
-  if(ghToken) headers['Authorization']='Bearer '+ghToken;
+  const headers={'Accept':(syncBackend==='gitee'?'application/json':'application/vnd.github+json'),'User-Agent':'workbench'};
+  if(ghToken) headers['Authorization']=authScheme()+' '+ghToken;
   opts.headers=Object.assign(headers,opts.headers||{});
   if(opts.body) opts.headers['Content-Type']='application/json';
-  return fetch(GH_API+path,opts);
+  return fetch(apiBase()+path,opts);
 }
 /* 带指数退避的重试：网络错误/限流(403)重试；404/409 等按原样返回由调用方处理 */
 async function retryFetch(fn){
@@ -3230,13 +3254,14 @@ async function cloudGet(){
   try{
     const r=await retryFetch(()=>ghApi(ghPath()),'GET');
     if(r.status===404) return {ok:false,status:404};
-    if(!r.ok) return {ok:false,status:r.status};
+    if(!r.ok){ syncDiag(false,'云端返回 '+r.status+'（'+(syncBackend==='github'?'GitHub 在大陆常被墙，请到设置换成 Gitee':'读取失败')+'）',r.status); return {ok:false,status:r.status}; }
     const j=await r.json();
     let obj=null;
     try{ obj=JSON.parse(b64decodeUtf8(j.content)); }catch(e){ return {ok:false,status:500}; }
     ghSha=j.sha;
+    syncDiag(true);
     return {ok:true,obj,sha:j.sha,status:200};
-  }catch(e){ return {ok:false,status:-1}; }
+  }catch(e){ syncDiag(false,'网络/跨域被拦截（GitHub 在大陆常被墙，请在设置换成 Gitee）',-1); return {ok:false,status:-1}; }
 }
 /* 推送 data.json（带冲突重试 409：别人先写则重拉合并再试，最终一致） */
 async function cloudPut(data){
@@ -3252,46 +3277,52 @@ async function cloudPut(data){
       if(cur.ok){ data=mergeRemote(cur.obj); state=data; persistLocal(); fullRender(); }
       continue;
     }
-    if(r.status===401){ return {ok:false,status:401}; }
-    if(!r.ok) return {ok:false,status:r.status};
+    if(r.status===401){ syncDiag(false,'Token 无效或无权限（需仓库 Contents 读写）',401); return {ok:false,status:401}; }
+    if(!r.ok){ syncDiag(false,'写入失败 HTTP '+r.status,r.status); return {ok:false,status:r.status}; }
     try{ const j=await r.json(); ghSha=j.content?j.content.sha:ghSha; }catch(e){}
     _ghLastSig=stateSig(data);
+    syncDiag(true);
     return {ok:true,status:200};
   }
+  syncDiag(false,'冲突重试失败',409);
   return {ok:false,status:409};
 }
 
 /* 设置页：保存并开启同步 */
 async function saveGhSync(){
   ghToken=document.getElementById('setGhToken').value.trim();
-  ghRepo=document.getElementById('setGhRepo').value.trim()||'workbench-sync';
+  syncBackend=document.getElementById('setSyncBackend').value||'github';
+  var bk=SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github;
+  ghRepo=document.getElementById('setGhRepo').value.trim()|| bk.repo;
   ghOwner=document.getElementById('setGhOwner').value.trim()||'chenxiaoju-carlo';
   const el=document.getElementById('ghSyncStatus');
-  if(!ghToken){ el.textContent='⚠️ 请先填写 GitHub Token'; el.style.color='#c0392b'; return; }
+  if(!ghToken){ el.textContent='⚠️ 请先填写 Token'; el.style.color='#c0392b'; return; }
   saveGhCreds();
   const res=await cloudGet();
-  if(res.status===401){ el.textContent='❌ Token 无效或权限不足（需 workbench-sync 仓库 Contents 读+写）'; el.style.color='#c0392b'; return; }
+  if(res.status===401){ el.textContent='❌ Token 无效或权限不足（需 '+bk.repo+' 仓库 Contents 读+写）'; el.style.color='#c0392b'; return; }
   _booted=true;
   if(res.ok && res.obj){ state=mergeRemote(res.obj); migrate(state); persistLocal(); fullRender(); }
   else if(res.status===404){ if(!hasRealData(state)){ state=initState(); applyPreset(); } }
   startRealtime();
   if(hasRealData(state)) schedulePush();
   hideSyncBanner();
-  el.textContent='✅ 同步已开启，手机↔电脑实时同步'; el.style.color='#1f8a1f';
-  toast('✅ 同步已开启');
+  el.textContent='✅ 已用 '+bk.label+' 开启同步，手机↔电脑实时同步'; el.style.color='#1f8a1f';
+  toast('✅ 同步已开启（'+bk.label+'）');
 }
 /* 设置页：测试连接 */
 async function testGhSync(){
   ghToken=document.getElementById('setGhToken').value.trim();
-  ghRepo=document.getElementById('setGhRepo').value.trim()||'workbench-sync';
+  syncBackend=document.getElementById('setSyncBackend').value||'github';
+  var bk=SYNC_BACKENDS[syncBackend]||SYNC_BACKENDS.github;
+  ghRepo=document.getElementById('setGhRepo').value.trim()|| bk.repo;
   ghOwner=document.getElementById('setGhOwner').value.trim()||'chenxiaoju-carlo';
   const el=document.getElementById('ghSyncStatus');
   if(!ghToken){ el.textContent='⚠️ 请先填写 Token'; el.style.color='#c0392b'; return; }
   const res=await cloudGet();
-  if(res.status===401){ el.textContent='❌ Token 无效或权限不足（需仓库 Contents 读+写）'; el.style.color='#c0392b'; }
+  if(res.status===401){ el.textContent='❌ Token 无效或权限不足（需 '+bk.repo+' 仓库 Contents 读+写）'; el.style.color='#c0392b'; }
   else if(res.status===404){ el.textContent='✅ Token 有效，云端暂无数据（首次同步会创建）'; el.style.color='#1f8a1f'; }
-  else if(res.ok){ el.textContent='✅ 连接成功，已读到云端数据('+Object.keys(res.obj).length+' 个顶层字段)'; el.style.color='#1f8a1f'; }
-  else { el.textContent='⚠️ HTTP '+res.status; el.style.color='#c0392b'; }
+  else if(res.ok){ el.textContent='✅ 连接成功（'+bk.label+'），已读到云端数据('+Object.keys(res.obj).length+' 个顶层字段)'; el.style.color='#1f8a1f'; }
+  else { el.textContent='⚠️ HTTP '+res.status+'（'+(syncBackend==='github'?'GitHub 大陆可能不可达，换 Gitee':'连接失败')+'）'; el.style.color='#c0392b'; }
 }
 function showSyncBanner(){
   let b=document.getElementById('__syncBanner');
@@ -3299,7 +3330,7 @@ function showSyncBanner(){
   b=document.createElement('div');
   b.id='__syncBanner';
   b.style.cssText='position:fixed;left:0;right:0;bottom:0;background:#1f6feb;color:#fff;padding:10px 14px;font-size:13px;z-index:9998;display:flex;gap:10px;align-items:center;justify-content:center;text-align:center;cursor:pointer';
-  b.innerHTML='🔑 开启手机↔电脑同步：到「设置 → 云端同步」粘贴 GitHub Token（仅存本机，永久不丢）';
+  b.innerHTML='🔑 开启手机↔电脑同步：到「设置 → 云端同步」粘贴 Token（国内微信请用 Gitee 后端，仅存本机）';
   b.onclick=()=>{ try{ openSettings(); }catch(e){} };
   document.body.appendChild(b);
 }
@@ -3661,12 +3692,14 @@ function bootSync(){
    随后立即清掉地址栏里的 Token，避免它残留在浏览器历史中。仅在本机生效，不会上传。 */
 try{
   const _h=(typeof location!=='undefined'&&location&&location.hash)||'';
+  const _s=_h.match(/[#&]s=(github|gitee)/);
+  if(_s){ syncBackend=_s[1]; }
   const _m=_h.match(/[#&]t=([^&]+)/);
   if(_m){
     const _t=decodeURIComponent(_m[1]);
     if(_t){ ghToken=_t; saveGhCreds();
       try{ if(history&&history.replaceState) history.replaceState(null,'',(location.pathname||'/')+(location.search||'')); }catch(_){}
-      console.log('已从配置链接自动开启同步');
+      console.log('已从配置链接自动开启同步（'+syncBackend+'）');
     }
   }
 }catch(e){}
