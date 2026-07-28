@@ -3329,19 +3329,44 @@ function hasRealData(s){
 }
 /* 手动「上传同步」按钮：立即把本机合并后推上去 */
 function pushSync(){ _booted=true; flushSync(); }
+/* 数组合并辅助：把本地对象 l 合并进远端基线 r，本地字段优先（含 done=true 不被云端 done=false 覆盖），
+   嵌套对象/数组递归深合并，绝不整体互覆盖。 */
+function deepMergeItem(r, l){
+  const out=JSON.parse(JSON.stringify(r));
+  for(const key in l){
+    const lv=l[key], rv=r[key];
+    if(Array.isArray(lv)&&Array.isArray(rv)){
+      const m=new Map();
+      rv.forEach(it=>{ if(it&&it.id) m.set(it.id,it); });
+      lv.forEach(it=>{ if(it&&it.id) m.set(it.id,it); else m.set('_'+Math.random(),it); });
+      out[key]=[...m.values()];
+    } else if(lv&&typeof lv==='object'&&!Array.isArray(lv)&&rv&&typeof rv==='object'&&!Array.isArray(rv)){
+      out[key]=deepMergeItem(rv, lv);
+    } else {
+      out[key]=(lv!==undefined&&lv!==null&&lv!=='')?lv:rv; /* 本地有值优先 */
+    }
+  }
+  return out;
+}
 /* 合并：本机(state) + 云端(remote) → 绝不丢失任何一方
-   - 数组：按 id 并集（剔除种子占位任务，避免重复计划）
+   - 数组：按 id 并集（剔除种子占位任务，避免重复计划）；同 id 对象做「字段级深合并、本地优先」，
+     因此刚勾选的 done=true 不会被云端旧值 done=false 覆盖（根治打卡勾选后退回去）
    - 对象(按 key，如 dailyLog/weekPlan)：按 key 深合并
    - settings：本机优先 */
 function mergeRemote(remote){
-  const local=state;
+  const local=(state&&typeof state==='object')?state:{};
   const out=JSON.parse(JSON.stringify(remote));
   for(const k of ARR_KEYS){
     if(Array.isArray(remote[k])&&Array.isArray(local[k])){
-      const map=new Map();
-      local[k].forEach(x=>{ if(x&&x.id && !(k==='tasks'&&isSeedTask(x))) map.set(x.id,x); });
-      remote[k].forEach(x=>{ if(x&&x.id) map.set(x.id,x); });
-      out[k]=[...map.values()];
+      const byId=new Map();
+      remote[k].forEach(x=>{ if(x&&x.id && !(k==='tasks'&&isSeedTask(x))) byId.set(x.id, JSON.parse(JSON.stringify(x))); });
+      local[k].forEach(x=>{
+        if(!x||!x.id) return;
+        if(k==='tasks'&&isSeedTask(x)&&byId.has(x.id)) return; /* 跳过种子占位，避免重复计划 */
+        const base=byId.get(x.id);
+        byId.set(x.id, base?deepMergeItem(base,x):JSON.parse(JSON.stringify(x)));
+      });
+      out[k]=[...byId.values()];
     }
   }
   for(const k of OBJ_KEYS){
