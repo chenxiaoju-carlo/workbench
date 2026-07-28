@@ -3458,11 +3458,13 @@ async function doPush(){
 }
 function schedulePush(){
   if(_pendingPush) return;
-  if(!state||!state.settings||!state.settings.autoSync||!syncReady()) return;
+  /* 只要配置好 Token（syncReady）即开启同步；不再被 autoSync 开关拦截
+     （之前 autoSync 默认 false 导致已加载旧数据的设备永远不推送，是同步失效的根因） */
+  if(!state||!state.settings||!syncReady()) return;
   if(!_booted) return;          /* 启动完成前不推送（避免首屏空种子覆盖云端） */
   _pendingPush=true;
   if(_pushTimer) return;        /* 防抖：1.2 秒内多次改动只推一次 */
-  _pushTimer=setTimeout(()=>{ _pushTimer=null; doPush(); }, 1200);
+  _pushTimer=setTimeout(()=>{ _pushTimer=null; return doPush(); }, 1200);
 }
 /* 离开页面 / 切后台时立即把待推送内容发到云端，确保最后一次改动不丢 */
 function flushSync(){ if(_pendingPush){ _pushTimer=null; doPush(); } }
@@ -3538,12 +3540,17 @@ function importData(file){
   }catch(e){toast('导入失败：'+e.message);}};
   rd.readAsText(file);
 }
-/* 实时同步：每30秒静默拉取，仅当数据真变化才刷新界面，避免打扰正在输入 */
+/* 实时同步：每30秒静默拉取，仅当数据真变化才刷新界面，避免打扰正在输入。
+   stateSig 必须覆盖「所有会被同步的字段」：任一增/删/改/勾选都要改变签名，否则 doPush 会误判「无变化」跳过推送。 */
 function stateSig(s){
-  return [s.tasks.map(t=>t.done?1:0).join(''),s.ideas.length,(s.verified||[]).length,s.posts.length,
-    s.reading.length,s.moods.length,s.plans.length,s.learning.length,
-    Object.keys(s.mealPick||{}).length,s.interactIdx,s.trendsUpdatedAt,s.dailyLog?Object.keys(s.dailyLog).length:0
-  ].join('|');
+  const arr=ARR_KEYS.map(k=>(s[k]||[]).map(x=>{
+    const c=(x.content?(''+x.content).length:0)+(x.note?(''+x.note).length:0)+(x.why?(''+x.why).length:0)+(x.tip?(''+x.tip).length:0);
+    return (x.id||'?')+(x.done?'1':'0')+(x.book||'')+(x.author||'')+(x.date||'')+(x.name||'')+c;
+  }).join(','));
+  const obj=OBJ_KEYS.map(k=>Object.keys(s[k]||{}).join(','));
+  const extra=[ (s.weekPlan?JSON.stringify(s.weekPlan).length:0), (s.dailyEats?Object.keys(s.dailyEats).length:0),
+                (s.fridge?(s.fridge.length):0), (s.mealPick?Object.keys(s.mealPick).length:0), (s.trendsUpdatedAt||0) ].join(',');
+  return arr.join('|')+'##'+obj.join('|')+'##'+extra;
 }
 async function silentPull(){ await doPull(true); }
 
