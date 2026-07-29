@@ -1501,6 +1501,21 @@ function repairState(s){
     if(Array.isArray(x.chat)) x.chat.forEach(c=>{ if(c&&c.text&&typeof c.text==='string') c.text=repairMojibake(c.text); });
   };
   ['tasks','ideas','posts','reading','moods','favorites'].forEach(k=>{ if(Array.isArray(s[k])) s[k].forEach(fixOne); });
+  /* 清除测试/调试产生的残留任务（无用户交互证据的自动删除，防止云端脏数据同步回来）。
+     必须在 repairState 里做（每次合并前对 remote+local 都执行），否则本地删了云端又拉回来。 */
+  if(Array.isArray(s.tasks)){
+    const TEST_PATTERNS=/同步|测试|test|sync|debug|专属任务|自定义|模拟|mock|临时|验证|新增任务|另一个|我的自/;
+    const before=s.tasks.length;
+    s.tasks=s.tasks.filter(t=>{
+      if(!t||!t.name) return false;
+      if(TEST_PATTERNS.test(t.name)){
+        const hasInteraction=(t.chat&&t.chat.length>1)||t.done;
+        if(!hasInteraction) return false;
+      }
+      return true;
+    });
+    if(s.tasks.length!==before) console.log('[repairState] 清除测试残留:',before,'→',s.tasks.length);
+  }
   return s;
 }
 /* 种子每日计划按 name 去重：本地加载时（含离线/云端不可达场景）即可把历史产生的重复或乱码种子合并为一条，\n   done 取「或」绝不丢勾选；非种子自定义任务按 id 保留，不受影响。保证无论网络如何，每日计划都不会出现 26 条重复。 */
