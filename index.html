@@ -1445,6 +1445,64 @@ function initState(){
     settings:{persona:'',llmBase:'',llmModel:'',llmKey:'',syncMode:'gist',syncUrl:'',syncToken:'',gistUrl:'',ghToken:'',hotspotUrl:'',autoSync:false}
   };
 }
+/* 修复「UTF-8 被当 Latin1 多重编码」产生的乱码。
+   判定依据：把字符串当作 UTF-8 字节流解码，仅当「字节序列结构合法且解码后确有变化」才视为乱码并修复；
+   因此正常的合法 Latin1 文本（如 café）不会被误改，绝不丢失用户真实数据。浏览器/Node 均无需 TextEncoder。 */
+function _tryDecodeUtf8(bytes){
+  let out=''; let i=0;
+  while(i<bytes.length){
+    const c=bytes[i];
+    if(c<0x80){ out+=String.fromCharCode(c); i++; }
+    else if((c&0xE0)===0xC0){
+      if(i+1>=bytes.length||(bytes[i+1]&0xC0)!==0x80) return null;
+      const cp=((c&0x1F)<<6)|(bytes[i+1]&0x3F);
+      if(cp<0x80) return null;
+      out+=String.fromCharCode(cp); i+=2;
+    } else if((c&0xF0)===0xE0){
+      if(i+2>=bytes.length||(bytes[i+1]&0xC0)!==0x80||(bytes[i+2]&0xC0)!==0x80) return null;
+      const cp=((c&0x0F)<<12)|((bytes[i+1]&0x3F)<<6)|(bytes[i+2]&0x3F);
+      if(cp<0x800||(cp>=0xD800&&cp<=0xDFFF)) return null;
+      out+=String.fromCharCode(cp); i+=3;
+    } else if((c&0xF8)===0xF0){
+      if(i+3>=bytes.length||(bytes[i+1]&0xC0)!==0x80||(bytes[i+2]&0xC0)!==0x80||(bytes[i+3]&0xC0)!==0x80) return null;
+      let cp=((c&0x07)<<18)|((bytes[i+1]&0x3F)<<12)|((bytes[i+2]&0x3F)<<6)|(bytes[i+3]&0x3F);
+      if(cp<0x10000) return null;
+      cp-=0x10000; out+=String.fromCharCode(0xD800+(cp>>10),0xDC00+(cp&0x3FF)); i+=4;
+    } else return null;
+  }
+  return out;
+}
+function repairMojibake(s){
+  if(typeof s!=='string'||!s) return s;
+  let cur=s;
+  for(let pass=0; pass<4; pass++){
+    let bytes, dec;
+    if([...cur].every(ch=>ch.charCodeAt(0)<=255)){            /* 纯 Latin1 字节串 */
+      bytes=[...cur].map(ch=>ch.charCodeAt(0));
+      dec=_tryDecodeUtf8(bytes);
+    } else {                                                   /* 已含 >0xFF 字符（疑似多重编码）：先转回字节再解 */
+      try{ bytes=[...unescape(encodeURIComponent(cur))].map(ch=>ch.charCodeAt(0)); dec=_tryDecodeUtf8(bytes); }
+      catch(e){ dec=null; }
+    }
+    if(dec===null || dec===cur) break;
+    cur=dec;
+  }
+  return cur;
+}
+/* 修复整个 state 对象里所有用户文本字段的乱码（仅当字节流合法 UTF-8 且解码有变化才改，绝不误伤正常中文/合法 Latin1）。
+   必须在 mergeRemote「之前」调用：乱码名修成正常名后，种子按名字去重才会生效，否则乱码被当自定义任务保留。 */
+function repairState(s){
+  if(!s||typeof s!=='object') return s;
+  const fixOne=x=>{
+    if(!x||typeof x!=='object') return;
+    ['name','t','why','content','book','note','body','mood','title','platform'].forEach(f=>{
+      if(x[f]&&typeof x[f]==='string') x[f]=repairMojibake(x[f]);
+    });
+    if(Array.isArray(x.chat)) x.chat.forEach(c=>{ if(c&&c.text&&typeof c.text==='string') c.text=repairMojibake(c.text); });
+  };
+  ['tasks','ideas','posts','reading','moods','favorites'].forEach(k=>{ if(Array.isArray(s[k])) s[k].forEach(fixOne); });
+  return s;
+}
 function migrate(d){
   d.version=d.version||2;
   d._seeded = d._seeded===true; /* 保留种子标记，真实数据持久化后为 false */
@@ -1462,7 +1520,13 @@ function migrate(d){
   if(d.trends.length&&!d.trends[0].cover)d.trends=SEED_TRENDS.map(t=>({...t,id:uid()}));
   d.trendsUpdatedAt=d.trendsUpdatedAt||Date.now();
   d.tasks=d.tasks&&d.tasks.length?d.tasks:SEED_TASKS.map(n=>({id:uid(),name:n,done:false,chat:[]})); /* 空数组也恢复种子（云端可能因autoSync旧bug从未上传过tasks） */
-  d.tasks.forEach(t=>{if(!t.chat)t.chat=[];});
+  d.tasks.forEach(t=>{ t.name=repairMojibake(t.name); if(!t.chat)t.chat=[]; });
+  // 修复历史可能写入的乱码文本（仅含乱码标记才处理，正常内容不受影响）
+  (d.ideas||[]).forEach(x=>{ if(x&&x.t)x.t=repairMojibake(x.t); if(x&&x.why)x.why=repairMojibake(x.why); });
+  (d.posts||[]).forEach(x=>{ if(x&&x.content)x.content=repairMojibake(x.content); if(x&&x.platform)x.platform=repairMojibake(x.platform); });
+  (d.reading||[]).forEach(x=>{ if(x&&x.book)x.book=repairMojibake(x.book); if(x&&x.note)x.note=repairMojibake(x.note); });
+  (d.moods||[]).forEach(x=>{ if(x&&x.body)x.body=repairMojibake(x.body); if(x&&x.mood)x.mood=repairMojibake(x.mood); });
+  (d.favorites||[]).forEach(x=>{ if(x&&x.title)x.title=repairMojibake(x.title); if(x&&x.note)x.note=repairMojibake(x.note); });
   if(d.tasksDate!==todayStr()){
     const allDone=d.tasks.length>0&&d.tasks.every(t=>t.done);
     if(allDone&&d.lastDoneAll!==d.tasksDate){d.streak=(d.streak||0)+1;d.lastDoneAll=d.tasksDate;}
@@ -3295,7 +3359,7 @@ async function cloudPut(data){
     /* 冲突(409) / Gitee 的 sha 失效(400)：重拉云端合并再试，最终一致，不丢任一方数据 */
     if(r.status===409 || (syncBackend==='gitee' && r.status===400)){
       const cur=await cloudGet();
-      if(cur.ok){ data=mergeRemote(cur.obj,'local'); state=data; persistLocal(); fullRender(); }
+      if(cur.ok){ repairState(cur.obj); repairState(data); data=mergeRemote(cur.obj,'local'); state=data; persistLocal(); fullRender(); }
       continue;
     }
     if(r.status===401){ syncDiag(false,'Token 无效或无权限（需仓库 Contents 读写）',401); return {ok:false,status:401}; }
@@ -3324,7 +3388,7 @@ async function saveGhSync(){
   const res=await cloudGet();
   if(res.status===401){ el.textContent='❌ Token 无效或权限不足（需 '+bk.repo+' 仓库 Contents 读+写）'; el.style.color='#c0392b'; return; }
   _booted=true;
-  if(res.ok && res.obj){ state=mergeRemote(res.obj); migrate(state); persistLocal(); fullRender(); }
+  if(res.ok && res.obj){ repairState(res.obj); repairState(state); state=mergeRemote(res.obj); migrate(state); persistLocal(); fullRender(); }
   else if(res.status===404){ if(!hasRealData(state)){ state=initState(); applyPreset(); } }
   startRealtime();
   if(hasRealData(state)) schedulePush();
@@ -3461,6 +3525,7 @@ async function doPush(){
     if(res.ok && res.obj){
       const cloudHas=hasRealData(res.obj), localHas=hasRealData(state);
       if(cloudHas && !localHas) return; /* 云端有数据而本机只是空种子 → 不覆盖云端 */
+      repairState(res.obj); repairState(state); /* 乱码先修，种子按名去重才生效 */
       const merged=mergeRemote(res.obj,'local');
       if(JSON.stringify(merged)!==JSON.stringify(state)){ state=merged; persistLocal(); lastLocalSave=Date.now(); fullRender(); }
       toPush=state;
@@ -3504,6 +3569,7 @@ async function doPull(silent){
   }
   const obj=res.obj; if(!obj||typeof obj!=='object') return;
   if(!hasRealData(obj)){ if(!silent)toast('云端暂无数据，已保留本机'); return; }
+  repairState(obj); repairState(state); /* 乱码先修，种子按名去重才生效 */
   const merged=mergeRemote(obj,'remote');
   if(stateSig(merged)===stateSig(state)){ if(!silent)toast('已是最新 ☁️'); return; }
   state=merged; persistLocal(); fullRender();
@@ -3704,6 +3770,7 @@ async function bootPull(firstLoad){
     const _localSnapshot = state && typeof state==='object' ? JSON.parse(JSON.stringify(state)) : null;
     const res=await cloudGet();
     if(res.ok && res.obj){
+      repairState(res.obj); repairState(state); /* 乱码先修，种子按名去重才生效 */
       state=mergeRemote(res.obj,'remote'); migrate(state); /* 云端有数据：云端优先合并本机，两端都不丢 */
       /* 安全网：若合并后关键数组变空但本地原来有数据，恢复本地并标记需立即上传 */
       if(_localSnapshot && _localSnapshot.tasks && _localSnapshot.tasks.length &&
