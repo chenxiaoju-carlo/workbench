@@ -3484,14 +3484,25 @@ function mergeRemote(remote, prefer){
     if(Array.isArray(remote[k])&&Array.isArray(local[k])){
       const byId=new Map();
       const seenNames=new Set();
-      /* 先加入云端数据（含种子任务，必须保留），记录已见 name 用于本地种子去重 */
-      remote[k].forEach(x=>{ if(x&&x.id){ byId.set(x.id, JSON.parse(JSON.stringify(x))); if(x.name) seenNames.add(x.name); } });
+      /* 种子任务（固定 7 条每日计划）按 name 去重，两侧都生效：
+         - 云端若被历史 bug/测试污染成多条同名种子，合并时只保留一条、done 取「或」（绝不丢任一侧的勾选）；
+         - 本机乱码种子经 repairState 还原成正常名后，也会被这里按名去重，杜绝重复计划。
+         非种子任务（用户自定义）仍按 id 并集，互不误并。 */
+      const seedEntry=new Map();
+      const addItem=(x)=>{
+        if(!x||!x.id) return;
+        if(k==='tasks'&&isSeedTask(x)){
+          if(seedEntry.has(x.name)){ const e=byId.get(seedEntry.get(x.name)); if(e) e.done=e.done||x.done; return; }
+          seedEntry.set(x.name, x.id);
+        }
+        byId.set(x.id, JSON.parse(JSON.stringify(x)));
+        if(x.name) seenNames.add(x.name);
+      };
+      remote[k].forEach(addItem);
       local[k].forEach(x=>{
         if(!x||!x.id) return;
         if(byId.has(x.id)){ byId.set(x.id, deepMergeItem(byId.get(x.id), x, prefer)); return; }
-        /* 本地种子任务：若云端已有同名种子（两端各自初始化的 id 不同但名字相同），则跳过，避免重复计划；否则保留 */
-        if(k==='tasks'&&isSeedTask(x)&&seenNames.has(x.name)) return;
-        byId.set(x.id, JSON.parse(JSON.stringify(x)));
+        addItem(x);
       });
       out[k]=[...byId.values()];
     }
