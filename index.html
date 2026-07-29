@@ -1503,6 +1503,18 @@ function repairState(s){
   ['tasks','ideas','posts','reading','moods','favorites'].forEach(k=>{ if(Array.isArray(s[k])) s[k].forEach(fixOne); });
   return s;
 }
+/* 种子每日计划按 name 去重：本地加载时（含离线/云端不可达场景）即可把历史产生的重复或乱码种子合并为一条，\n   done 取「或」绝不丢勾选；非种子自定义任务按 id 保留，不受影响。保证无论网络如何，每日计划都不会出现 26 条重复。 */
+function dedupSeedTasks(tasks){
+  if(!Array.isArray(tasks)) return tasks;
+  const keepIdx=new Map(); const out=[];
+  for(const t of tasks){
+    if(t&&isSeedTask(t)&&t.name){
+      if(keepIdx.has(t.name)){ const k=out[keepIdx.get(t.name)]; if(t.done)k.done=true; continue; }
+      keepIdx.set(t.name, out.length); out.push(t);
+    } else out.push(t);
+  }
+  return out;
+}
 function migrate(d){
   d.version=d.version||2;
   d._seeded = d._seeded===true; /* 保留种子标记，真实数据持久化后为 false */
@@ -1521,6 +1533,7 @@ function migrate(d){
   d.trendsUpdatedAt=d.trendsUpdatedAt||Date.now();
   d.tasks=d.tasks&&d.tasks.length?d.tasks:SEED_TASKS.map(n=>({id:uid(),name:n,done:false,chat:[]})); /* 空数组也恢复种子（云端可能因autoSync旧bug从未上传过tasks） */
   d.tasks.forEach(t=>{ t.name=repairMojibake(t.name); if(!t.chat)t.chat=[]; });
+  d.tasks=dedupSeedTasks(d.tasks); /* 本地离线也去重：重复/乱码种子合并为 7 条，不依赖云端合并 */
   // 修复历史可能写入的乱码文本（仅含乱码标记才处理，正常内容不受影响）
   (d.ideas||[]).forEach(x=>{ if(x&&x.t)x.t=repairMojibake(x.t); if(x&&x.why)x.why=repairMojibake(x.why); });
   (d.posts||[]).forEach(x=>{ if(x&&x.content)x.content=repairMojibake(x.content); if(x&&x.platform)x.platform=repairMojibake(x.platform); });
