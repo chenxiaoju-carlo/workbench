@@ -1104,7 +1104,8 @@ const VERIFIED_TOPICS=[
  {t:'muji 今年还有活动吗？蹲 muji200-50',why:'MUJI 活动不透明，用户高频搜索「200-50」；蹲活动＝持续讨论＋收藏待通知。',tip:'结构：先讲去年/近期活动规律 + 今年预测时间窗 + 「蹲的扣1」；评论区成情报站。'},
  {t:'减脂期沃尔玛最夯的东西有哪些',why:'减脂人群巨大且爱抄作业；「最夯」＝从众心理，天然想看别人买啥。',tip:'结构：按「蛋白/碳水/零食」分类各推 1-2 样 + 热量标注；结尾「你减脂期最爱哪样」。'},
  {t:'补水面膜 2 块钱一张可以用哪些',why:'极致性价比＋面膜高频刚需；「2 块」制造价格冲击，想抄清单。',tip:'结构：列出 3-5 款 2 元档面膜 + 各自适用肤质 + 用法；结尾「你用过哪款」。'},
- {t:'求助，面膜是每天敷还是隔天敷更好',why:'争议型求助，护肤党必发言；「每天 vs 隔天」立场对立，评论区自己吵起来。',tip:'结构：先抛自己的困惑 + 引 1 个皮肤科观点 + 「你们怎么敷」；不给标准答案反而更热。'}
+ {t:'求助，面膜是每天敷还是隔天敷更好',why:'争议型求助，护肤党必发言；「每天 vs 隔天」立场对立，评论区自己吵起来。',tip:'结构：先抛自己的困惑 + 引 1 个皮肤科观点 + 「你们怎么敷」；不给标准答案反而更热。'},
+ {t:'去山姆，一人说一个第一名买的东西？',why:'山姆会员店自带「必买清单」心智，一人说一个＝评论区接龙，天然 UGC 爆款；从众＋晒单欲。',tip:'结构：先抛「你心中山姆第一名是啥」＋自己提名 1 样（带理由/到手价）；结尾让大家接龙，评论区自动变成选购指南。'}
 ];
 
 let lastLocalSave=0;
@@ -1565,8 +1566,11 @@ function migrate(d){
   // 修复历史可能写入的乱码文本（仅含乱码标记才处理，正常内容不受影响）
   (d.ideas||[]).forEach(x=>{ if(x&&x.t)x.t=repairMojibake(x.t); if(x&&x.why)x.why=repairMojibake(x.why); });
   (d.posts||[]).forEach(x=>{ if(x&&x.content)x.content=repairMojibake(x.content); if(x&&x.platform)x.platform=repairMojibake(x.platform); });
+  // 复盘记录结构兜底：老数据/手建记录可能缺 metrics/self/tips/score/date 子字段，
+  // 缺失会导致 renderReview 访问 undefined 直接白屏（用户误以为记录丢失）。此处只补默认、绝不删除任何内容。
+  (d.posts||[]).forEach(x=>{ if(x){ x.metrics=x.metrics||{}; x.self=x.self||{}; x.tips=x.tips||[]; if(typeof x.score!=='number')x.score=0; if(!x.date)x.date=''; } });
   (d.reading||[]).forEach(x=>{ if(x&&x.book)x.book=repairMojibake(x.book); if(x&&x.note)x.note=repairMojibake(x.note); });
-  (d.moods||[]).forEach(x=>{ if(x&&x.body)x.body=repairMojibake(x.body); if(x&&x.mood)x.mood=repairMojibake(x.mood); });
+  (d.moods||[]).forEach(x=>{ if(x&&x.body)x.body=repairMojibake(x.body); if(x&&x.mood)x.mood=repairMojibake(x.mood); if(x&&!x.date)x.date=''; });
   (d.favorites||[]).forEach(x=>{ if(x&&x.title)x.title=repairMojibake(x.title); if(x&&x.note)x.note=repairMojibake(x.note); });
   if(d.tasksDate!==todayStr()){
     const allDone=d.tasks.length>0&&d.tasks.every(t=>t.done);
@@ -2646,10 +2650,10 @@ function svgBars(data){
 function svgLine(data){
   const W=600,H=170,pad=32;if(!data.length)return '<div class="empty">还没有心情记录</div>';
   const n=data.length;const stepX=(W-pad*2)/Math.max(n-1,1);
-  const pts=data.map((d,i)=>({x:pad+i*stepX,y:pad+(1-(d.v-1)/4)*(H-pad*2),t:d.label,v:d.v}));
+  const pts=data.map((d,i)=>({x:pad+i*stepX,y:pad+(1-(d.v-1)/4)*(H-pad*2),t:(d.label||''),v:d.v}));
   let g='';[1,2,3,4,5].forEach(v=>{const y=pad+(1-(v-1)/4)*(H-pad*2);g+=`<line x1="${pad}" y1="${y.toFixed(1)}" x2="${W-pad}" y2="${y.toFixed(1)}" stroke="#eee" stroke-width="1"/><text x="4" y="${(y+3).toFixed(1)}" font-size="9" fill="#aaa">${v}</text>`;});
   const path='M'+pts.map(p=>p.x.toFixed(1)+','+p.y.toFixed(1)).join(' L');
-  let dots=pts.map(p=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="#0F6E56"/><text x="${p.x.toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="9" fill="#888">${p.t.slice(5)}</text>`).join('');
+  let dots=pts.map(p=>`<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.5" fill="#0F6E56"/><text x="${p.x.toFixed(1)}" y="${H-8}" text-anchor="middle" font-size="9" fill="#888">${(p.t||'').slice(5)}</text>`).join('');
   return `<svg viewBox="0 0 ${W} ${H}" width="100%">${g}<path d="${path}" fill="none" stroke="#0F6E56" stroke-width="2" stroke-linejoin="round"/>${dots}</svg>`;
 }
 function renderStats(){
