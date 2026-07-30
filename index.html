@@ -297,6 +297,7 @@
     <div class="brand"><div class="logo">🌿</div><span>陈小菊的工作台</span></div>
     <div class="nav-item active" data-view="overview"><span class="ico">🏠</span><span class="lbl">概览</span></div>
     <div class="nav-item" data-view="tasks"><span class="ico">✅</span><span class="lbl">每日计划</span></div>
+    <div class="nav-item" data-view="eat"><span class="ico">🍱</span><span class="lbl">吃饭</span></div>
     <div class="nav-item" data-view="ideas"><span class="ico">💡</span><span class="lbl">选题灵感</span></div>
     <div class="nav-item" data-view="trends"><span class="ico">🔥</span><span class="lbl">自媒体热点</span></div>
     <div class="nav-item" data-view="reading"><span class="ico">📚</span><span class="lbl">读书</span></div>
@@ -389,9 +390,13 @@
 
     <!-- TASKS -->
     <section class="view" id="view-tasks">
+      <div class="card" id="makeupCard" style="display:none;background:#fff5f5;border-color:#f0c0c0">
+        <div id="makeupBanner"></div>
+      </div>
+
       <div class="card">
         <h2>✅ 每日计划</h2>
-        <p class="sub">完成后打勾 · 可随时新增 / 删除 · 每天自动重置打卡 · 点 💬 和 AI 聊今天怎么做更好</p>
+        <p class="sub">做到了就打勾 ✅；没做到的会记下来，第二天狠狠提醒你补齐。每周任务只在对应星期出现（周二抖音素材 / 周三公众号素材 / 周四小红书互动话题）。点 💬 和 AI 聊今天怎么做更好。</p>
         <div class="progress-wrap">
           <div class="progress-txt"><span id="taskProgTxt2">0 / 0 完成</span><span id="taskProgPct2">0%</span></div>
           <div class="progress-bar"><i id="taskProgBar2" style="width:0%"></i></div>
@@ -402,7 +407,10 @@
           <button class="btn" onclick="addTask()">+ 新增</button>
         </div>
       </div>
+    </section>
 
+    <!-- EAT（从每日计划拆出：饮品/餐食/反馈/周流程/今晚总结/本周食谱） -->
+    <section class="view" id="view-eat">
       <div class="card" id="drinkCard">
         <h2>🥤 今日养生饮品（自由搭配 · 打豆浆/糊/羹）</h2>
         <p class="sub">把多种食材组合打成一杯，点一种材料就告诉你「为什么这样搭、有什么好处」。每天有系统推荐搭配，也能自己加减（像你早上那样苹果干+茯苓+山药+黄豆+银耳+百合+玉竹+陈皮+莲子一起打）。每加一样，下面都会实时更新搭配建议。</p>
@@ -904,9 +912,27 @@ const todayStr=()=>new Date().toISOString().slice(0,10);
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 // 日期工具：dateHash 用于历史回看确定性复现；todayStr 见下
 
-const SEED_TASKS=[
-  '9点早起打卡','每个账号内容发布','找一个新的选题','今日读书','做一餐好吃的饭','每日养生饮品','古法运动40分钟'
+/* 每日计划：7 条每日种子 + 3 条每周种子（周二/三/四），共 10 条。
+   打卡按日期记录（doneDates），不同步互相覆盖；每周任务只在对应星期出现。 */
+const DAILY_SEEDS=[
+  '早起：坚持9点',
+  '小红书：笔记发布（互动+攻略）',
+  '公众号：收集选题，输出文章',
+  '抖音：口播（学习如何做+实操+发布）',
+  '读书：读一个章节',
+  '饮食：自己做饭+饮品，坚决不吃夜宵',
+  '运动：古法运动50分钟'
 ];
+const WEEKLY_SEEDS=[
+  {name:'小红书：找新的互动话题（每周找2-3条）',weekday:4}, /* 周四 */
+  {name:'公众号：准备本周的素材',weekday:3},                /* 周三 */
+  {name:'抖音：找新的口播素材',weekday:2}                   /* 周二 */
+];
+const SEED_TASKS=[...DAILY_SEEDS,...WEEKLY_SEEDS.map(w=>w.name)];
+const SEED_META={};
+DAILY_SEEDS.forEach(n=>SEED_META[n]={cat:'daily',weekday:null});
+WEEKLY_SEEDS.forEach(w=>SEED_META[w.name]={cat:'weekly',weekday:w.weekday});
+function seedTaskObj(n){return {id:uid(),name:n,cat:SEED_META[n].cat,weekday:SEED_META[n].weekday,doneDates:{},chat:[]};}
 
 /* 养生饮品：改为「食材库自由搭配」模式（针对陈小菊体质定制）
    体质：齿痕·脾胃虚弱·湿气重·血气不足·脱发；忌生冷；可一次打多种食材成豆浆/糊/羹
@@ -1432,7 +1458,7 @@ function initState(){
     version:2,
     _seeded:true, /* 标记这是初始种子数据：同步时不应与云端合并成重复，且应优先采用云端 */
     tasksDate:todayStr(),
-    tasks:SEED_TASKS.map(n=>({id:uid(),name:n,done:false,chat:[]})),
+    tasks:SEED_TASKS.map(seedTaskObj),
     streak:0,lastDoneAll:null,
     ideas:[],verified:VERIFIED_TOPICS.map(v=>({id:uid(),t:v.t,why:v.why||'',tip:v.tip||''})),posts:[],reading:[],plans:[],learning:[],moods:[],favorites:[],
     dailyLog:{},
@@ -1525,7 +1551,7 @@ function dedupSeedTasks(tasks){
   const keepIdx=new Map(); const out=[];
   for(const t of tasks){
     if(t&&isSeedTask(t)&&t.name){
-      if(keepIdx.has(t.name)){ const k=out[keepIdx.get(t.name)]; if(t.done)k.done=true; continue; }
+      if(keepIdx.has(t.name)){ const k=out[keepIdx.get(t.name)]; k.doneDates=Object.assign({},k.doneDates||{},t.doneDates||{}); continue; }
       keepIdx.set(t.name, out.length); out.push(t);
     } else out.push(t);
   }
@@ -1547,22 +1573,31 @@ function migrate(d){
   // 兼容旧版热点格式（无 cover 字段则视为旧种子，重置为新格式；热点非用户录入数据）
   if(d.trends.length&&!d.trends[0].cover)d.trends=SEED_TRENDS.map(t=>({...t,id:uid()}));
   d.trendsUpdatedAt=d.trendsUpdatedAt||Date.now();
-  d.tasks=d.tasks&&d.tasks.length?d.tasks:SEED_TASKS.map(n=>({id:uid(),name:n,done:false,chat:[]})); /* 空数组也恢复种子（云端可能因autoSync旧bug从未上传过tasks） */
-  d.tasks.forEach(t=>{ t.name=repairMojibake(t.name); if(!t.chat)t.chat=[]; });
-  d.tasks=dedupSeedTasks(d.tasks); /* 本地离线也去重：重复/乱码种子合并为 7 条，不依赖云端合并 */
-  /* 清除历史测试/调试产生的残留任务（含测试标记且用户从未交互过：无聊天记录、未打卡）。
-     只清除明确是垃圾的；用户真实添加的自定义任务（有 chat 或曾经 done）一律保留。 */
+  // —— 每日计划重构（用户 redesign）：旧版 7 种子 → 新版 10 种子（7 每日 + 3 每周）——
+  // 旧版种子名（被新设计取代）；旧种子若含真实交互则转成自定义保留，避免误丢历史记录。
+  const OLD_SEED_NAMES=['9点早起打卡','每个账号内容发布','找一个新的选题','今日读书','做一餐好吃的饭','每日养生饮品','古法运动40分钟'];
+  (d.tasks||[]).forEach(t=>{ t.name=repairMojibake(t.name); if(!t.chat)t.chat=[]; t.doneDates=t.doneDates||{}; });
+  // 拆出自定义任务（非旧种子、非新种子）；旧种子带交互的也转自定义保留
+  let customs=(d.tasks||[]).filter(t=>t&&t.name&&!OLD_SEED_NAMES.includes(t.name)&&!isSeedTask(t));
+  (d.tasks||[]).forEach(t=>{ if(t&&t.name&&OLD_SEED_NAMES.includes(t.name)){ const interacted=(t.chat&&t.chat.length>1)||t.done||Object.keys(t.doneDates||{}).length; if(interacted&&!customs.some(c=>c.name===t.name)){ t.name='［旧计划］'+t.name; customs.push(t); } } });
+  const _byName=new Map(customs.map(t=>[t.name,t]));
+  // 拼装：新种子优先（已存在同名则沿用其 doneDates）；其余自定义置底
+  const seeds=SEED_TASKS.map(n=>{ if(_byName.has(n)){ const ex=_byName.get(n); _byName.delete(n); ex.cat=SEED_META[n].cat; ex.weekday=SEED_META[n].weekday; ex.doneDates=ex.doneDates||{}; ex.chat=ex.chat||[]; return ex; } return seedTaskObj(n); });
+  const rest=[..._byName.values()].map(t=>{ t.cat=t.cat||'custom'; t.weekday=t.weekday||null; t.doneDates=t.doneDates||{}; t.chat=t.chat||[]; return t; });
+  d.tasks=[...seeds,...rest];
+  // 测试残留清理（仅影响自定义任务；新种子名不匹配清理规则）
   const TEST_PATTERNS=/同步|测试|test|sync|debug|专属任务|自定义|模拟|mock|临时|验证|新增任务|另一个|我的自/;
   const beforeClean=d.tasks.length;
   d.tasks=d.tasks.filter(t=>{
     if(!t||!t.name) return false;
-    if(TEST_PATTERNS.test(t.name)){
-      const hasInteraction=(t.chat&&t.chat.length>1)||t.done; /* 有真实对话或打过勾 = 用户用过 */
+    if(TEST_PATTERNS.test(t.name)&&!isSeedTask(t)){
+      const hasInteraction=(t.chat&&t.chat.length>1)||Object.keys(t.doneDates||{}).length;
       if(!hasInteraction) return false; /* 无交互的测试残留 → 删除 */
     }
     return true;
   });
   if(d.tasks.length!==beforeClean) console.log('[migrate] 已清除 '+beforeClean+'→'+d.tasks.length+' 条测试残留任务');
+  d.tasks=dedupSeedTasks(d.tasks); /* 本地离线也去重：重复种子合并为一条，不依赖云端合并 */
   // 修复历史可能写入的乱码文本（仅含乱码标记才处理，正常内容不受影响）
   (d.ideas||[]).forEach(x=>{ if(x&&x.t)x.t=repairMojibake(x.t); if(x&&x.why)x.why=repairMojibake(x.why); });
   (d.posts||[]).forEach(x=>{ if(x&&x.content)x.content=repairMojibake(x.content); if(x&&x.platform)x.platform=repairMojibake(x.platform); });
@@ -1573,9 +1608,12 @@ function migrate(d){
   (d.moods||[]).forEach(x=>{ if(x&&x.body)x.body=repairMojibake(x.body); if(x&&x.mood)x.mood=repairMojibake(x.mood); if(x&&!x.date)x.date=''; });
   (d.favorites||[]).forEach(x=>{ if(x&&x.title)x.title=repairMojibake(x.title); if(x&&x.note)x.note=repairMojibake(x.note); });
   if(d.tasksDate!==todayStr()){
-    const allDone=d.tasks.length>0&&d.tasks.every(t=>t.done);
-    if(allDone&&d.lastDoneAll!==d.tasksDate){d.streak=(d.streak||0)+1;d.lastDoneAll=d.tasksDate;}
-    d.tasks.forEach(t=>t.done=false);
+    // 按日期结算昨日全勤（打卡已改为 doneDates 按日期记录，不再每日清空）
+    const y=yesterdayStr();
+    const dueY=(d.tasks||[]).filter(t=>isDueOn(t,y));
+    const yAllDone=dueY.length>0&&dueY.every(t=>doneOn(t,y));
+    if(yAllDone&&d.lastDoneAll!==y){ d.streak=(d.streak||0)+1; d.lastDoneAll=y; }
+    else if(!yAllDone&&d.lastDoneAll!==y){ d.streak=0; }
     d.tasksDate=todayStr();
   }
 }
@@ -1595,7 +1633,7 @@ function recordDaily(){
   const mood=state.moods.filter(m=>m.date===d).slice(-1)[0]||null;
   state.dailyLog[d]={
     date:d,
-    tasks:state.tasks.map(t=>({name:t.name,done:t.done})),
+    tasks:state.tasks.filter(t=>isDueOn(t,d)).map(t=>({name:t.name,done:!!(t.doneDates&&t.doneDates[d])})),
     drinks:(rec.drinkMix&&rec.drinkMix.length)?rec.drinkMix:drinks,
     meals:{lunch:meals.lunch,dinner:meals.dinner},
     mood:mood?{mood:mood.mood,body:mood.body}:null,
@@ -1613,6 +1651,36 @@ function addDays(s,n){const dt=parseDate(s);if(!dt)return s;dt.setDate(dt.getDat
 function weekStartOf(s){const dt=parseDate(s);if(!dt)return s;const off=(dt.getDay()-4+7)%7;dt.setDate(dt.getDate()-off);return fmtDate(dt);}
 function isThursday(s){const dt=parseDate(s);return !!dt&&dt.getDay()===4;}
 function datesOfWeek(ws){const out=[];const dt=parseDate(ws);for(let i=0;i<7;i++)out.push(fmtDate(new Date(dt.getFullYear(),dt.getMonth(),dt.getDate()+i)));return out;}
+/* ---------- 每日计划：按日期打卡 / 每周任务 / 补课提醒 ---------- */
+function weekdayOf(ds){const dt=parseDate(ds);return dt?dt.getDay():new Date().getDay();} /* 0=日..6=六 */
+function yesterdayStr(){return addDays(todayStr(),-1);}
+function doneOn(t,ds){return !!(t&&t.doneDates&&t.doneDates[ds]);}
+function isDueOn(t,ds){
+  if(!t)return false;
+  if(!t.cat||t.cat==='daily')return true;
+  if(t.cat==='weekly')return weekdayOf(ds)===t.weekday;
+  return true;
+}
+/* 某任务最近一次「应做日」（用于判断昨天/近期是否没做到） */
+function lastDueDate(t,today){
+  if(t&&t.cat==='weekly'){
+    let d=parseDate(yesterdayStr());
+    let guard=0;
+    while(d.getDay()!==t.weekday){ d.setDate(d.getDate()-1); if(++guard>14)break; }
+    return fmtDate(d);
+  }
+  return yesterdayStr();
+}
+/* 补课清单：所有「应做却没做到」的种子/自定义任务（限最近一周内，避免远古堆积） */
+function makeupList(today){
+  today=today||todayStr();
+  const out=[];
+  (state.tasks||[]).forEach(t=>{
+    const ld=lastDueDate(t,today);
+    if(ld&&addDays(ld,7)>=today && isDueOn(t,ld) && !doneOn(t,ld)) out.push({task:t,due:ld});
+  });
+  return out;
+}
 /* 饮品：返回当天「推荐搭配」——一组食材名（可一键用，也可自己加减） */
 function suggestBlend(ds){
   const h=dateHash(ds);
@@ -1654,7 +1722,8 @@ function switchTab(v){
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===v));
   document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
   document.getElementById('view-'+v).classList.add('active');
-  if(v==='tasks')renderDailyPlan();
+  if(v==='tasks')renderTasks();
+  if(v==='eat')renderDailyPlan();
   if(v==='ideas'){renderIdeaToday();renderVerified();renderFavSection('idea');}
   if(v==='trends')renderTrends();
   if(v==='mood')renderMood();
@@ -1684,7 +1753,9 @@ function switchRTab(t){
 
 /* ---------- motivation (狠狠督促) ---------- */
 function renderMotivation(){
-  const done=state.tasks.filter(t=>t.done).length,total=state.tasks.length;
+  const _t=todayStr();
+  const _due=state.tasks.filter(t=>isDueOn(t,_t));
+  const done=_due.filter(t=>doneOn(t,_t)).length,total=_due.length;
   const remain=total-done;
   let title,sub,line;
   if(total===0){title='陈小菊，先加几个任务吧！';sub='';line='别发呆，现在就列今天的计划 💥';}
@@ -1712,7 +1783,9 @@ function renderMotivation(){
 
 /* ---------- overview ---------- */
 function renderOverview(){
-  const done=state.tasks.filter(t=>t.done).length,total=state.tasks.length;
+  const _t=todayStr();
+  const _due=state.tasks.filter(t=>isDueOn(t,_t));
+  const done=_due.filter(t=>doneOn(t,_t)).length,total=_due.length;
   const pct=total?Math.round(done/total*100):0;
   document.getElementById('statGrid').innerHTML=`
     <div class="stat"><div class="n">${done}/${total}</div><div class="l">今日任务完成</div></div>
@@ -2199,21 +2272,56 @@ function genWeekSummaryAI(){
 
 /* ---------- tasks + chat ---------- */
 function renderTasks(){
-  const done=state.tasks.filter(t=>t.done).length,total=state.tasks.length;
+  const today=todayStr();
+  const due=state.tasks.filter(t=>isDueOn(t,today)); /* 仅显示今天应做的（每周任务只在对应星期出现） */
+  const done=due.filter(t=>doneOn(t,today)).length,total=due.length;
   const pct=total?Math.round(done/total*100):0;
   document.getElementById('taskProgTxt2').textContent=`${done} / ${total} 完成`;
   document.getElementById('taskProgPct2').textContent=pct+'%';
   document.getElementById('taskProgBar2').style.width=pct+'%';
   const list=document.getElementById('taskList');
-  if(!state.tasks.length){list.innerHTML='<div class="empty">还没有任务，下面添加一个吧</div>';return;}
-  list.innerHTML=state.tasks.map(t=>`
-    <div class="task ${t.done?'done':''}" data-id="${t.id}">
-      <div class="chk" onclick="toggleTask('${t.id}')">${t.done?'✓':''}</div>
-      <div class="name" onclick="toggleTask('${t.id}')">${esc(t.name)}</div>
+  if(!due.length){list.innerHTML='<div class="empty">今天没有待办计划，去「吃饭」看看喝什么吧 🥤</div>';renderMakeup();return;}
+  list.innerHTML=due.map(t=>{
+    const d=doneOn(t,today);
+    const tag=t.cat==='weekly'?`<span class="pill other" style="margin-left:6px">每周${['日','一','二','三','四','五','六'][t.weekday]}做</span>`:'';
+    return `<div class="task ${d?'done':''}" data-id="${t.id}">
+      <div class="chk" onclick="toggleTask('${t.id}')">${d?'✓':''}</div>
+      <div class="name" onclick="toggleTask('${t.id}')">${esc(t.name)}${tag}</div>
       <button class="chatbtn" onclick="toggleChat('${t.id}')">💬</button>
       <div class="del" onclick="delTask('${t.id}')">✕</div>
     </div>
-    ${openChatId===t.id?chatPanel(t):''}`).join('');
+    ${openChatId===t.id?chatPanel(t):''}`;
+  }).join('');
+  renderMakeup();
+}
+/* 补课提醒：列出「本应做却没做到」的任务（昨天/近期），狠狠教育，可一键补齐 */
+function renderMakeup(){
+  const box=document.getElementById('makeupBanner');if(!box)return;
+  const card=document.getElementById('makeupCard');
+  const mk=makeupList(todayStr());
+  if(!mk.length){ if(card)card.style.display='none'; box.innerHTML=''; return; }
+  if(card)card.style.display='block';
+  const today=todayStr();
+  const items=mk.map(({task,due})=>{
+    const fixed=doneOn(task,today);
+    const wk=['日','一','二','三','四','五','六'][weekdayOf(due)];
+    const btn=fixed
+      ? '<span class="pill" style="background:#e8f7ee;color:#1a8a4a">已补齐</span>'
+      : `<button class="btn ghost sm" style="color:#c0392b;border-color:#e6b3b3" onclick="makeupDone('${task.id}','${due}')">今天补齐 ✓</button>`;
+    return `<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px dashed #f0c9c9">
+      <div style="flex:1"><b style="color:#c0392b">${esc(task.name)}</b><div class="meta" style="color:#a55">本该在 ${due}（周${wk}）做到，你没做</div></div>
+      ${btn}
+    </div>`;
+  }).join('');
+  box.innerHTML=`<div style="font-weight:700;color:#c0392b;margin-bottom:4px">🔥 昨天/最近没做到的事，今天必须补上！</div>
+    <div style="font-size:13px;color:#a33;margin-bottom:8px">陈小菊，别找借口。没做到的事就是要做到——下面是你欠下的「作业」，今天一项一项清掉，否则明天又来一遍。狠狠地补！💪</div>
+    ${items}`;
+}
+function makeupDone(id,due){
+  const t=state.tasks.find(x=>x.id===id);if(!t)return;
+  const today=todayStr();
+  t.doneDates[today]=true; t.done=true;
+  save();renderTasks();renderOverview();renderMotivation();toast('补上了！但下不为例 🔥');
 }
 function chatPanel(t){
   const msgs=(t.chat||[]).map(m=>{
@@ -2297,15 +2405,17 @@ async function callLLM(system,userMsg,history){
 function addTask(){
   const v=document.getElementById('newTask').value.trim();
   if(!v){toast('先写点什么吧');return;}
-  state.tasks.push({id:uid(),name:v,done:false,chat:[]});
+  state.tasks.push({id:uid(),name:v,cat:'custom',weekday:null,doneDates:{},done:false,chat:[]});
   document.getElementById('newTask').value='';save();renderTasks();renderOverview();renderMotivation();
 }
 function toggleTask(id){
   const t=state.tasks.find(x=>x.id===id);if(!t)return;
-  t.done=!t.done;
-  if(state.tasks.length&&state.tasks.every(x=>x.done)&&state.lastDoneAll!==state.tasksDate){
-    state.streak=(state.streak||0)+1;state.lastDoneAll=state.tasksDate;toast('🎉 今日全勤！打卡 +1');
-  }
+  const today=todayStr();
+  const was=doneOn(t,today);
+  t.doneDates[today]=!was; t.done=!was; /* 按日期打卡，不清除历史 */
+  const due=state.tasks.filter(x=>isDueOn(x,today));
+  const allDone=due.length>0&&due.every(x=>doneOn(x,today));
+  if(allDone&&state.lastDoneAll!==today){state.streak=(state.streak||0)+1;state.lastDoneAll=today;toast('🎉 今日全勤！打卡 +1');}
   save();renderTasks();renderOverview();renderMotivation();
 }
 function delTask(id){state.tasks=state.tasks.filter(x=>x.id!==id);save();renderTasks();renderOverview();renderMotivation();}
@@ -2505,7 +2615,8 @@ function renderDailySummary(){
 function genInsight(){
   const box=document.getElementById('insightOut');if(!box)return;
   const d=todayStr();
-  const tasks=state.tasks.map(t=>({name:t.name,done:t.done}));
+  const _d0=todayStr();
+  const tasks=state.tasks.filter(t=>isDueOn(t,_d0)).map(t=>({name:t.name,done:!!(t.doneDates&&t.doneDates[_d0])}));
   const ideas=state.ideas.slice(-5).map(i=>i.text);
   const trends=(TRENDS_DB||[]).slice(0,6).map(t=>t.topic||t.title||'');
   const reading=state.reading.slice(-3).map(b=>b.book+(b.note?('：'+b.note):''));
@@ -2593,7 +2704,8 @@ function genMorningReport(force){
   }
   if(box.dataset.loading==='1')return; /* 防止重复请求 */
   box.dataset.loading='1';
-  const tasks=state.tasks.map(t=>({name:t.name,done:t.done}));
+  const _d0=todayStr();
+  const tasks=state.tasks.filter(t=>isDueOn(t,_d0)).map(t=>({name:t.name,done:!!(t.doneDates&&t.doneDates[_d0])}));
   const ideas=state.ideas.slice(-5).map(i=>i.text);
   const favTitles=state.favorites.slice(0,8).map(f=>f.title);
   const trends=(TRENDS_DB||[]).slice(0,5).map(t=>t.topic||t.title||'');
@@ -2658,8 +2770,10 @@ function svgLine(data){
 }
 function renderStats(){
   const box=document.getElementById('statsBox');if(!box)return;
-  const totalTasks=state.tasks.length;
-  const doneToday=state.tasks.filter(t=>t.done).length;
+  const _d1=todayStr();
+  const _due1=state.tasks.filter(t=>isDueOn(t,_d1));
+  const totalTasks=_due1.length;
+  const doneToday=_due1.filter(t=>doneOn(t,_d1)).length;
   const ideas=state.ideas.length,books=state.reading.length,favs=state.favorites.length;
   const days=Object.keys(state.dailyLog).sort().slice(-7);
   const bars=days.map(d=>{const L=state.dailyLog[d];const t=L.tasks||[];const done=t.filter(x=>x.done).length;return {label:d.slice(5),value:t.length?Math.round(done/t.length*100):0};});
@@ -3537,7 +3651,7 @@ function mergeRemote(remote, prefer){
       const addItem=(x)=>{
         if(!x||!x.id) return;
         if(k==='tasks'&&isSeedTask(x)){
-          if(seedEntry.has(x.name)){ const e=byId.get(seedEntry.get(x.name)); if(e) e.done=e.done||x.done; return; }
+          if(seedEntry.has(x.name)){ const e=byId.get(seedEntry.get(x.name)); if(e) e.doneDates=Object.assign({},x.doneDates||{},e.doneDates||{}); return; }
           seedEntry.set(x.name, x.id);
         }
         byId.set(x.id, JSON.parse(JSON.stringify(x)));
