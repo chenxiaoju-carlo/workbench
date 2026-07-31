@@ -300,7 +300,7 @@
   <aside class="sidebar">
     <div class="brand"><div class="logo">🌿</div><span>陈小菊的工作台</span></div>
     <div class="nav-item active" data-view="overview"><span class="ico">🏠</span><span class="lbl">概览</span></div>
-    <div class="nav-item" data-view="tasks"><span class="ico">✅</span><span class="lbl">每日必做计划</span></div>
+    <div class="nav-item" data-view="tasks"><span class="ico">✅</span><span class="lbl">每日必做</span></div>
     <div class="nav-item" data-view="eat"><span class="ico">🍱</span><span class="lbl">吃饭</span></div>
     <div class="nav-item" data-view="ideas"><span class="ico">💡</span><span class="lbl">选题灵感</span></div>
     <div class="nav-item" data-view="trends"><span class="ico">🔥</span><span class="lbl">自媒体热点</span></div>
@@ -348,7 +348,7 @@
       <div class="card">
         <h2>💡 怎么用得更好</h2>
         <ul class="guide">
-          <li><b>先打卡</b>：每天打开先勾每日必做计划，全勤有连击 🔥</li>
+          <li><b>先打卡</b>：每天打开先勾每日必做，全勤有连击 🔥</li>
           <li><b>每个任务点 💬</b>：和 AI 聊「今天怎么做得更好」，它给具体步骤（需先在⚙️填密钥）</li>
           <li><b>每天看晨报</b>：首页顶部「🌅 每日晨报」每天自动生成，一句早安 + 今天最该做的 3 件事（需先在⚙️填 AI Key）</li>
           <li><b>选题没灵感</b>：去「自媒体热点」存几个，配标题公式直接发；每天还有「互动主题」活跃账号</li>
@@ -399,7 +399,7 @@
       </div>
 
       <div class="card">
-        <h2>✅ 每日必做计划</h2>
+        <h2>✅ 每日必做</h2>
         <p class="sub">做到了就打勾 ✅；没做到的会记下来，第二天狠狠提醒你补齐。每周任务只在对应星期出现（周二抖音素材 / 周三公众号素材 / 周四小红书互动话题）。点 💬 和 AI 聊今天怎么做更好。</p>
         <div class="progress-wrap">
           <div class="progress-txt"><span id="taskProgTxt2">0 / 0 完成</span><span id="taskProgPct2">0%</span></div>
@@ -413,7 +413,7 @@
       </div>
     </section>
 
-    <!-- EAT（从每日必做计划拆出：饮品/餐食/反馈/周流程/今晚总结/本周食谱） -->
+    <!-- EAT（从每日必做拆出：饮品/餐食/反馈/周流程/今晚总结/本周食谱） -->
     <section class="view" id="view-eat">
       <div class="card" id="drinkCard">
         <h2>🥤 今日养生饮品（自由搭配 · 打豆浆/糊/羹）</h2>
@@ -2632,7 +2632,7 @@ function renderDailySummary(){
     const undone=tasks.filter(t=>!t.done);
     focus.push({t:'任务收尾',d:`今日任务 ${done}/${tasks.length} 已完成，还剩 ${undone.length} 条没打卡。优先把高优先级的做完再收工，别让今日待办滚到明天。`});
   }else{
-    focus.push({t:'先定计划',d:'今天还没建任务清单，去「每日必做计划」先列 3 条「必须完成」的事，完成即打卡。'});
+    focus.push({t:'先定计划',d:'今天还没建任务清单，去「每日必做」先列 3 条「必须完成」的事，完成即打卡。'});
   }
   if(ideasToday||postsToday){
     focus.push({t:'内容产出',d:`今天已存 ${ideasToday} 条选题、写 ${postsToday} 次复盘，趁热打铁把它们拍成笔记发出去，别让弹药堆在库房。`});
