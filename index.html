@@ -933,6 +933,11 @@ const SEED_META={};
 DAILY_SEEDS.forEach(n=>SEED_META[n]={cat:'daily',weekday:null});
 WEEKLY_SEEDS.forEach(w=>SEED_META[w.name]={cat:'weekly',weekday:w.weekday});
 function seedTaskObj(n){return {id:uid(),name:n,cat:SEED_META[n].cat,weekday:SEED_META[n].weekday,doneDates:{},chat:[]};}
+/* 废弃旧任务：用户 2026-07-30 明确要求「彻底删除」（此前要求'历史不丢'的例外）。
+   这些是从旧版迁移/重复残留、非用户有效自定义；其中两条(公众号选题+输出、［旧计划］9点早起打卡)
+   已被新版 10 种子覆盖。migrate 每次加载都移除，保证每日计划只显示这 10 条种子；
+   同步核心(mergeRemote)为并集冻结、不可改，故靠 migrate 兜底清理，云端另做一次性的清理 PUT。 */
+const CLEANUP_TASK_NAMES=['每个账号内容发布','找一个新的选题','今日读书','做一餐好吃的饭','每日养生饮品','古法运动40分钟','［旧计划］9点早起打卡','公众号选题+输出'];
 
 /* 养生饮品：改为「食材库自由搭配」模式（针对陈小菊体质定制）
    体质：齿痕·脾胃虚弱·湿气重·血气不足·脱发；忌生冷；可一次打多种食材成豆浆/糊/羹
@@ -1598,6 +1603,10 @@ function migrate(d){
   });
   if(d.tasks.length!==beforeClean) console.log('[migrate] 已清除 '+beforeClean+'→'+d.tasks.length+' 条测试残留任务');
   d.tasks=dedupSeedTasks(d.tasks); /* 本地离线也去重：重复种子合并为一条，不依赖云端合并 */
+  // 彻底删除用户指定的废弃旧任务（2026-07-30 例外于'历史不丢'）：每次加载都清理，确保每日计划只显示 10 条种子
+  const _bc=d.tasks.length;
+  d.tasks=d.tasks.filter(t=>!(t&&t.name&&CLEANUP_TASK_NAMES.includes(t.name)));
+  if(d.tasks.length!==_bc) console.log('[migrate] 已彻底移除 '+_bc+'→'+d.tasks.length+' 条废弃旧任务');
   // 修复历史可能写入的乱码文本（仅含乱码标记才处理，正常内容不受影响）
   (d.ideas||[]).forEach(x=>{ if(x&&x.t)x.t=repairMojibake(x.t); if(x&&x.why)x.why=repairMojibake(x.why); });
   (d.posts||[]).forEach(x=>{ if(x&&x.content)x.content=repairMojibake(x.content); if(x&&x.platform)x.platform=repairMojibake(x.platform); });
