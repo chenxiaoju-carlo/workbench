@@ -85,6 +85,10 @@
   .bubble.user{align-self:flex-end;background:var(--primary);color:#fff;border-bottom-right-radius:4px}
   .bubble.assistant{align-self:flex-start;background:#fff;border:1px solid var(--line);border-bottom-left-radius:4px}
   .bubble.system{align-self:stretch;background:#fff8f0;color:#9a6a2b;font-size:13px;border:1px solid #ffe2c2}
+  .coach-guide{background:linear-gradient(180deg,#eef6ff,#f7faff);border:1px solid #cfe0ff;border-radius:12px;padding:11px 13px;margin-bottom:10px}
+  .coach-h{font-weight:700;color:#2b6cb0;font-size:13px;margin-bottom:6px}
+  .coach-ul{margin:0;padding-left:18px}
+  .coach-ul li{font-size:13px;line-height:1.7;color:#33475b;white-space:pre-wrap;word-break:break-word}
 
   .add-row{display:flex;gap:8px;margin-top:6px}
   .add-row input{flex:1;border:1px solid var(--line);border-radius:11px;padding:11px 13px;background:#fbfbff}
@@ -296,7 +300,7 @@
   <aside class="sidebar">
     <div class="brand"><div class="logo">🌿</div><span>陈小菊的工作台</span></div>
     <div class="nav-item active" data-view="overview"><span class="ico">🏠</span><span class="lbl">概览</span></div>
-    <div class="nav-item" data-view="tasks"><span class="ico">✅</span><span class="lbl">每日计划</span></div>
+    <div class="nav-item" data-view="tasks"><span class="ico">✅</span><span class="lbl">每日必做计划</span></div>
     <div class="nav-item" data-view="eat"><span class="ico">🍱</span><span class="lbl">吃饭</span></div>
     <div class="nav-item" data-view="ideas"><span class="ico">💡</span><span class="lbl">选题灵感</span></div>
     <div class="nav-item" data-view="trends"><span class="ico">🔥</span><span class="lbl">自媒体热点</span></div>
@@ -344,7 +348,7 @@
       <div class="card">
         <h2>💡 怎么用得更好</h2>
         <ul class="guide">
-          <li><b>先打卡</b>：每天打开先勾每日计划，全勤有连击 🔥</li>
+          <li><b>先打卡</b>：每天打开先勾每日必做计划，全勤有连击 🔥</li>
           <li><b>每个任务点 💬</b>：和 AI 聊「今天怎么做得更好」，它给具体步骤（需先在⚙️填密钥）</li>
           <li><b>每天看晨报</b>：首页顶部「🌅 每日晨报」每天自动生成，一句早安 + 今天最该做的 3 件事（需先在⚙️填 AI Key）</li>
           <li><b>选题没灵感</b>：去「自媒体热点」存几个，配标题公式直接发；每天还有「互动主题」活跃账号</li>
@@ -395,7 +399,7 @@
       </div>
 
       <div class="card">
-        <h2>✅ 每日计划</h2>
+        <h2>✅ 每日必做计划</h2>
         <p class="sub">做到了就打勾 ✅；没做到的会记下来，第二天狠狠提醒你补齐。每周任务只在对应星期出现（周二抖音素材 / 周三公众号素材 / 周四小红书互动话题）。点 💬 和 AI 聊今天怎么做更好。</p>
         <div class="progress-wrap">
           <div class="progress-txt"><span id="taskProgTxt2">0 / 0 完成</span><span id="taskProgPct2">0%</span></div>
@@ -409,7 +413,7 @@
       </div>
     </section>
 
-    <!-- EAT（从每日计划拆出：饮品/餐食/反馈/周流程/今晚总结/本周食谱） -->
+    <!-- EAT（从每日必做计划拆出：饮品/餐食/反馈/周流程/今晚总结/本周食谱） -->
     <section class="view" id="view-eat">
       <div class="card" id="drinkCard">
         <h2>🥤 今日养生饮品（自由搭配 · 打豆浆/糊/羹）</h2>
@@ -938,6 +942,21 @@ function seedTaskObj(n){return {id:uid(),name:n,cat:SEED_META[n].cat,weekday:SEE
    已被新版 10 种子覆盖。migrate 每次加载都移除，保证每日计划只显示这 10 条种子；
    同步核心(mergeRemote)为并集冻结、不可改，故靠 migrate 兜底清理，云端另做一次性的清理 PUT。 */
 const CLEANUP_TASK_NAMES=['每个账号内容发布','找一个新的选题','今日读书','做一餐好吃的饭','每日养生饮品','古法运动40分钟','［旧计划］9点早起打卡','公众号选题+输出'];
+/* 每个计划的离线教练引导：无需 AI 密钥即可给出「今天具体怎么做」的步骤/建议。
+   有 AI 密钥时仍优先走大模型；无密钥时作为兜底引导，满足「每计划可对话、能给我建议/引导」。
+   key 与 SEED_TASKS 完全一致。 */
+const PLAN_COACH={
+ '早起：坚持9点':`目标：固定 9 点前起床，把作息稳住。\n① 今晚 23:30 前把手机放远、设一个 8:30 的闹钟；\n② 闹钟响立刻坐起，别碰手机，先喝一杯温水；\n③ 拉开窗帘见光 5 分钟，身体自然清醒；\n④ 用「9 点前洗漱+吃早饭」作为完成标准，做到了就打勾。\n小提醒：连续 3 天同一时间起，生物钟就稳了，别熬夜把进度补回去。`,
+ '小红书：笔记发布（互动+攻略）':`目标：今天发 1 篇能引互动的笔记。\n① 选题用「省钱/本地生活」角度，标题带数字和痛点，如「沃尔玛必买 TOP3」；\n② 封面用对比图/清单图，前 3 秒讲清好处；\n③ 正文给可照做的攻略+一句提问（"你最想试哪个？"）引评论；\n④ 发完主动回前 10 条评论、去同类博主笔记里真诚互动，涨互动权重。\n完成后打勾，并把互动数据记到灵感里。`,
+ '公众号：收集选题，输出文章':`目标：今天收 1 个选题 + 写出初稿。\n① 从你的小红书/抖音爆款和日常观察里挑 1 个反复被问的问题；\n② 用「问题—原因—做法—提醒」四段式搭骨架；\n③ 写 800-1200 字，开头 3 句直戳痛点；\n④ 配 1 张自制清单图，存草稿。\n小提醒：先完成再完美，今天的目标是"有初稿"，精修留明天。`,
+ '抖音：口播（学习如何做+实操+发布）':`目标：今天学 1 个口播技巧 + 实拍 1 条并发布。\n① 学：看 2 条同赛道爆款，记下它的开头钩子和语速；\n② 写 30 秒口播稿，前 3 秒抛反常识/提问；\n③ 实操：手机支架+自然光，录 3 遍选最顺的；\n④ 发布时加话题#和定位，标题用"你绝对不知道…"。\n完成了就打勾，复盘哪句最顺。`,
+ '读书：读一个章节':`目标：今天读完 1 个章节并留 1 句笔记。\n① 固定 20-30 分钟、手机勿扰的读书时间；\n② 先翻目录想"这章要解决什么"，带着问题读；\n③ 划线 1 句最有用的，合书用自己话写 1 句收获；\n④ 把这句收获丢进读书日记。\n小提醒：读不进去就换本书，别耗，关键是"每天一章"的节奏。`,
+ '饮食：自己做饭+饮品，坚决不吃夜宵':`目标：今天自己做饭 + 喝养生饮品，夜里不吃东西。\n① 早想好今晚菜单（一荤一素一汤/羹），下班顺路买齐；\n② 用破壁机打一杯健脾饮品（黄豆+山药/莲子，忌生冷）；\n③ 饭后刷牙，19:30 后厨房关门，饿了喝温水或早睡；\n④ 夜宵念头起来就记一句"明天早饭吃什么"转移。\n做到了打勾——胃舒服了，皮肤和情绪都跟着好。`,
+ '运动：古法运动50分钟':`目标：今天累计做满 50 分钟古法运动。\n① 选八段锦/八部金刚功/站桩，先热身 5 分钟；\n② 分段做：早 20 分 + 晚 30 分，降低门槛；\n③ 动作求"松静自然"，别硬撑，记录哪里酸胀（气堵信号）；\n④ 收功用搓热手心捂腰肾+慢走 3 分钟。\n小提醒：50 分钟是总量，拆开也能完成，关键是天天不断。`,
+ '小红书：找新的互动话题（每周找2-3条）':`目标：本周找 2-3 个能引互动的新话题。\n① 去评论区/搜索框看用户在问什么（"求推荐""怎么办"都是选题）；\n② 收 2-3 个高互动话题，标好"为什么能引互动"；\n③ 每个话题想 1 个笔记角度（清单/对比/踩坑）；\n④ 存进选题灵感，排期到下周发。\n今天（周四）完成，周末前就能用上。`,
+ '公众号：准备本周的素材':`目标：今天把本周公众号素材备齐。\n① 汇总这周小红书/抖音的爆点和用户问题；\n② 挑 2-3 个能深写的，列素材卡（观点+案例+数据）；\n③ 找配图/截图，归到一个素材夹；\n④ 定好发布日，写一句导语。\n周三搞定，周四周五就能从容成文。`,
+ '抖音：找新的口播素材':`目标：今天找 2-3 个新口播素材。\n① 刷同赛道，收藏 3 条"开头钩子强"的；\n② 从你的省钱/本地生活经验里挖 3 个"别人不知道"的点；\n③ 每点写 1 句口播钩子（反常识/提问式）；\n④ 存进选题灵感，标注"适合口播"。\n周二备好，这周口播不愁没话说。`
+};
 
 /* 养生饮品：改为「食材库自由搭配」模式（针对陈小菊体质定制）
    体质：齿痕·脾胃虚弱·湿气重·血气不足·脱发；忌生冷；可一次打多种食材成豆浆/糊/羹
@@ -2332,14 +2351,25 @@ function makeupDone(id,due){
   t.doneDates[today]=true; t.done=true;
   save();renderTasks();renderOverview();renderMotivation();toast('补上了！但下不为例 🔥');
 }
+function coachGuideHTML(t){
+  const g=PLAN_COACH[t.name];
+  if(!g)return '';
+  const lines=g.split('\n').map(s=>s.trim()).filter(Boolean).map(s=>`<li>${esc(s)}</li>`).join('');
+  return `<div class="coach-guide">
+    <div class="coach-h">🧭 教练引导 · 今天怎么做</div>
+    <ul class="coach-ul">${lines}</ul>
+  </div>`;
+}
 function chatPanel(t){
+  const guide=coachGuideHTML(t);
   const msgs=(t.chat||[]).map(m=>{
     if(m.role==='system')return `<div class="bubble system">${esc(m.content)}</div>`;
     return `<div class="bubble ${m.role}">${esc(m.content)}</div>`;
-  }).join('')||'<div class="bubble system">和 AI 聊聊这个任务吧～问它「今天怎么做得更好」，它会给你具体步骤。</div>';
+  }).join('')||'<div class="bubble system">点输入框问我「今天这个任务怎么做得更好」，没填 AI 密钥我也会按上面的引导给你建议～</div>';
   return `<div class="chat">
+    ${guide}
     <div class="chat-msgs" id="chatMsgs-${t.id}">${msgs}</div>
-    <div class="add-row"><input id="chatInput-${t.id}" placeholder="问 AI：今天这个任务怎么做得更好？" onkeydown="if(event.key==='Enter')sendChat('${t.id}')"/><button class="btn sm" onclick="sendChat('${t.id}')">发送</button></div>
+    <div class="add-row"><input id="chatInput-${t.id}" placeholder="问：今天这个任务怎么做得更好？" onkeydown="if(event.key==='Enter')sendChat('${t.id}')"/><button class="btn sm" onclick="sendChat('${t.id}')">发送</button></div>
   </div>`;
 }
 function toggleChat(id){openChatId=(openChatId===id?null:id);renderTasks();if(openChatId)scrollChat(id);}
@@ -2361,10 +2391,15 @@ async function sendChat(id){
   try{reply=await callLLM(taskSystem(t.name),msg,history);}catch(e){err=e;}
   if(reply){
     t.chat.push({role:'assistant',content:reply,ts:Date.now()});
-  }else{
+  }else if(err){
     const prompt=buildFallback(t.name,msg);
     try{navigator.clipboard.writeText(prompt);}catch(e){}
-    t.chat.push({role:'system',content:(err?'⚠️ AI 调用失败（'+err.message+'）。已把问题复制到剪贴板，去粘贴给 WorkBuddy 即可获得建议 🙌\n\n':'未配置 AI 密钥。已把问题复制到剪贴板，去粘贴给 WorkBuddy 即可获得建议 🙌\n\n')+prompt});
+    t.chat.push({role:'system',content:'⚠️ AI 调用失败（'+err.message+'）。已把问题复制到剪贴板，去粘贴给 WorkBuddy 即可获得建议 🙌\n\n'+prompt});
+  }else{
+    /* 无 AI 密钥：用内置教练引导给出建议/引导，满足「每计划可对话、能给建议」 */
+    const g=PLAN_COACH[t.name];
+    const body=g||('针对「'+t.name+'」，先定一个小目标，拆成 2-3 步今天就能做的动作，做完打勾。');
+    t.chat.push({role:'assistant',content:'关于你说的「'+msg+'」——我建议你这样开始：\n'+body,ts:Date.now()});
   }
   save();renderTasks();scrollChat(id);
 }
@@ -2597,7 +2632,7 @@ function renderDailySummary(){
     const undone=tasks.filter(t=>!t.done);
     focus.push({t:'任务收尾',d:`今日任务 ${done}/${tasks.length} 已完成，还剩 ${undone.length} 条没打卡。优先把高优先级的做完再收工，别让今日待办滚到明天。`});
   }else{
-    focus.push({t:'先定计划',d:'今天还没建任务清单，去「每日计划」先列 3 条「必须完成」的事，完成即打卡。'});
+    focus.push({t:'先定计划',d:'今天还没建任务清单，去「每日必做计划」先列 3 条「必须完成」的事，完成即打卡。'});
   }
   if(ideasToday||postsToday){
     focus.push({t:'内容产出',d:`今天已存 ${ideasToday} 条选题、写 ${postsToday} 次复盘，趁热打铁把它们拍成笔记发出去，别让弹药堆在库房。`});
