@@ -301,6 +301,7 @@
     <div class="brand"><div class="logo">🌿</div><span>陈小菊的工作台</span></div>
     <div class="nav-item active" data-view="overview"><span class="ico">🏠</span><span class="lbl">概览</span></div>
     <div class="nav-item" data-view="eat"><span class="ico">🍱</span><span class="lbl">吃饭</span></div>
+    <div class="nav-item" data-view="tasks"><span class="ico">✅</span><span class="lbl">每日必做</span></div>
     <div class="nav-item" data-view="ideas"><span class="ico">💡</span><span class="lbl">选题灵感</span></div>
     <div class="nav-item" data-view="trends"><span class="ico">🔥</span><span class="lbl">自媒体热点</span></div>
     <div class="nav-item" data-view="reading"><span class="ico">📚</span><span class="lbl">读书</span></div>
@@ -450,6 +451,29 @@
         <h2>🗓️ 周计划 & 周总结（每周四→下周三）</h2>
         <p class="sub">每周四自动生成：① 下周「买哪些菜 + 做哪些食谱」；② 上一周「你最终吃了什么 + 营养均衡评估」。每天点过「选这款 / 选这套」才会被统计进周总结。</p>
         <div id="weekCard"></div>
+      </div>
+    </section>
+
+    <!-- 每日必做 -->
+    <section class="view" id="view-tasks">
+      <div class="card">
+        <h2>✅ 每日必做</h2>
+        <p class="sub">做到就打勾 ✓。每周任务只在对应星期出现：<b>小红书互动话题=周四</b>、<b>公众号素材=周三</b>、<b>抖音口播素材=周二</b>。点每条右边的 💬 跟教练聊「今天怎么做得更好 / 怎么优化 / 给我支招」——填了 AI 密钥走大模型，没填也按内置引导给你步骤。</p>
+        <div style="display:flex;align-items:center;gap:10px;margin:6px 0 12px">
+          <div style="height:10px;background:#eee;border-radius:6px;overflow:hidden;flex:1">
+            <div id="taskProgBar2" style="height:100%;background:linear-gradient(90deg,#34c759,#1a8a4a);width:0%"></div>
+          </div>
+          <span id="taskProgTxt2" style="font-weight:600;font-size:13px">0 / 0 完成</span>
+          <span id="taskProgPct2" class="pill" style="background:#e8f7ee;color:#1a8a4a">0%</span>
+        </div>
+        <div id="makeupCard" style="display:none;margin-bottom:12px">
+          <div id="makeupBanner" class="note-box" style="border-color:#f0c9c9;margin:0"></div>
+        </div>
+        <div id="taskList"></div>
+        <div class="add-row" style="margin-top:14px">
+          <input id="newTask" placeholder="想加一条自己的计划？（选填）" style="flex:3" />
+          <button class="btn" onclick="addTask()">+ 添加</button>
+        </div>
       </div>
     </section>
 
@@ -915,17 +939,12 @@ const SEED_META={};
 DAILY_SEEDS.forEach(n=>SEED_META[n]={cat:'daily',weekday:null});
 WEEKLY_SEEDS.forEach(w=>SEED_META[w.name]={cat:'weekly',weekday:w.weekday});
 function seedTaskObj(n){return {id:uid(),name:n,cat:SEED_META[n].cat,weekday:SEED_META[n].weekday,doneDates:{},chat:[]};}
-/* 彻底清理的 task 名字：用户 2026-08-04 明确要求「每日必做模块删除，云端的也不要了」。
-   覆盖三类：(a) 2026-07-30 redesign 前的 8 条废弃旧任务；(b) redesign 引入的 10 条种子（7 每日+3 每周）；
-   (c) 任何带「（旧计划）」前缀的衍生任务。
-   同步核心(mergeRemote)为并集冻结不可改，故靠 migrate 每次加载都 filter 兜底清理；
-   云端也由 deploy 脚本做一次性清理 PUT（保留其他所有字段）。*/
+/* 彻底清理的废弃旧任务名字：用户 redesign 前的旧版任务残留，与重建后的「每日必做」模块种子无关，
+   必须保留清理以免旧数据残留。
+   注意：10 条每日必做种子（见 SEED_TASKS：早起9点/小红书笔记/公众号选题/抖音口播/读书/饮食/运动 + 每周三四二各1条）
+   是活跃模块，【绝不能】放进此列表，否则会被 migrate 的兜底清理直接删掉。*/
 const CLEANUP_TASK_NAMES=[
-  // (a) 8 条废弃旧任务
-  '每个账号内容发布','找一个新的选题','今日读书','做一餐好吃的饭','每日养生饮品','古法运动40分钟','［旧计划］9点早起打卡','公众号选题+输出',
-  // (b) 10 条种子（7 每日 + 3 每周）
-  '早起：坚持9点','小红书：笔记发布（互动+攻略）','公众号：收集选题，输出文章','抖音：口播（学习如何做+实操+发布）','读书：读一个章节','饮食：自己做饭+饮品，坚决不吃夜宵','运动：古法运动50分钟',
-  '小红书：找新的互动话题（每周找2-3条）','公众号：准备本周的素材','抖音：找新的口播素材'
+  '每个账号内容发布','找一个新的选题','今日读书','做一餐好吃的饭','每日养生饮品','古法运动40分钟','［旧计划］9点早起打卡','公众号选题+输出'
 ];
 /* 每个计划的离线教练引导：无需 AI 密钥即可给出「今天具体怎么做」的步骤/建议。
    有 AI 密钥时仍优先走大模型；无密钥时作为兜底引导，满足「每计划可对话、能给我建议/引导」。
@@ -1460,14 +1479,16 @@ function load(){
     const raw=localStorage.getItem(KEY);
     if(raw){const d=JSON.parse(raw);migrate(d);return d;}
   }catch(e){}
-  return null; /* 首次加载（无本地数据）→ 交由 bootSync 先从云端拉取，绝不返回空种子 */
+  /* 首次加载（无本地数据）：返回已 migrate 的初始种子数据，确保「每日必做」10 条计划对全新用户也立即可见；
+     之后再与云端合并（云端若有数据则并集，互不丢）。migrate 为就地修改，需先建对象再返回。 */
+  const _s=initState(); migrate(_s); return _s;
 }
 function initState(){
   return {
     version:2,
     _seeded:true, /* 标记这是初始种子数据：同步时不应与云端合并成重复，且应优先采用云端 */
     tasksDate:todayStr(),
-    tasks:[], /* 2026-08-04：用户明确删除「每日必做」模块，不再 seed 任何任务；用户自定义任务由用户自己后续在「新的计划」里加 */
+    tasks:[], /* 初始为空；migrate() 运行时会重新 seed 10 条「每日必做」种子（见 SEED_TASKS）。用户自定义任务由「新的计划」模块管理 */
     streak:0,lastDoneAll:null,
     ideas:[],verified:VERIFIED_TOPICS.map(v=>({id:uid(),t:v.t,why:v.why||'',tip:v.tip||''})),posts:[],reading:[],plans:[],learning:[],moods:[],favorites:[],
     dailyLog:{},
@@ -1586,10 +1607,19 @@ function migrate(d){
   // 旧版种子名（被新设计取代）；旧种子若含真实交互则转成自定义保留，避免误丢历史记录。
   const OLD_SEED_NAMES=['9点早起打卡','每个账号内容发布','找一个新的选题','今日读书','做一餐好吃的饭','每日养生饮品','古法运动40分钟'];
   (d.tasks||[]).forEach(t=>{ t.name=repairMojibake(t.name); if(!t.chat)t.chat=[]; t.doneDates=t.doneDates||{}; });
-  // 拆出自定义任务（非旧种子、非新种子）；旧种子带交互的也转自定义保留
-  let customs=(d.tasks||[]).filter(t=>t&&t.name&&!OLD_SEED_NAMES.includes(t.name)&&!isSeedTask(t));
-  (d.tasks||[]).forEach(t=>{ if(t&&t.name&&OLD_SEED_NAMES.includes(t.name)){ const interacted=(t.chat&&t.chat.length>1)||t.done||Object.keys(t.doneDates||{}).length; if(interacted&&!customs.some(c=>c.name===t.name)){ t.name='［旧计划］'+t.name; customs.push(t); } } });
-  const _byName=new Map(customs.map(t=>[t.name,t]));
+  // 旧版种子（被新设计取代）：带交互的改名保留为自定义；不带交互直接丢弃（避免旧数据残留）。
+  // 其余任务（含当前 10 种子、真实自定义）按 name 建索引，使「已存在同名种子沿用其 doneDates/chat」，
+  // 这样每天打卡的勾选在刷新/同步后不会丢。
+  const all=(d.tasks||[]).filter(t=>{
+    if(!t||!t.name) return false;
+    if(OLD_SEED_NAMES.includes(t.name)){
+      const interacted=(t.chat&&t.chat.length>1)||t.done||Object.keys(t.doneDates||{}).length;
+      if(!interacted) return false;            /* 非交互旧种子 → 直接丢弃 */
+      t.name='［旧计划］'+t.name;               /* 交互过的旧种子 → 改名保留为自定义 */
+    }
+    return true;
+  });
+  const _byName=new Map(all.map(t=>[t.name,t]));
   // 拼装：新种子优先（已存在同名则沿用其 doneDates）；其余自定义置底
   const seeds=SEED_TASKS.map(n=>{ if(_byName.has(n)){ const ex=_byName.get(n); _byName.delete(n); ex.cat=SEED_META[n].cat; ex.weekday=SEED_META[n].weekday; ex.doneDates=ex.doneDates||{}; ex.chat=ex.chat||[]; return ex; } return seedTaskObj(n); });
   const rest=[..._byName.values()].map(t=>{ t.cat=t.cat||'custom'; t.weekday=t.weekday||null; t.doneDates=t.doneDates||{}; t.chat=t.chat||[]; return t; });
@@ -1736,6 +1766,7 @@ function switchTab(v){
   document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
   document.getElementById('view-'+v).classList.add('active');
   if(v==='eat')renderDailyPlan();
+  if(v==='tasks')renderTasks();
   if(v==='ideas'){renderIdeaToday();renderVerified();renderFavSection('idea');}
   if(v==='trends')renderTrends();
   if(v==='mood')renderMood();
@@ -1799,12 +1830,16 @@ function renderOverview(){
   const _due=state.tasks.filter(t=>!isSeedTask(t)&&isDueOn(t,_t));
   const done=_due.filter(t=>doneOn(t,_t)).length,total=_due.length;
   const pct=total?Math.round(done/total*100):0;
+  /* 今日必做（10 条种子）的完成情况，概览一眼可见 */
+  const _seedDue=state.tasks.filter(t=>isSeedTask(t)&&isDueOn(t,_t));
+  const _seedDone=_seedDue.filter(t=>doneOn(t,_t)).length;
   document.getElementById('statGrid').innerHTML=`
     <div class="stat"><div class="n">${state.ideas.length}</div><div class="l">选题灵感</div></div>
     <div class="stat"><div class="n">${state.verified?state.verified.length:0}</div><div class="l">已验证爆款</div></div>
     <div class="stat"><div class="n">${state.posts.length}</div><div class="l">工作复盘</div></div>
     <div class="stat"><div class="n">${state.reading.length}</div><div class="l">读书记录</div></div>
-    <div class="stat"><div class="n">${state.plans.length}</div><div class="l">进行中计划</div></div>`;
+    <div class="stat"><div class="n">${state.plans.length}</div><div class="l">进行中计划</div></div>
+    <div class="stat"><div class="n">${_seedDone} / ${_seedDue.length}</div><div class="l">今日必做</div></div>`;
   document.getElementById('streakTxt').textContent=`连续全勤打卡：${state.streak} 天 🔥`;
   document.getElementById('taskProgTxt').textContent=`${done} / ${total} 完成`;
   document.getElementById('taskProgPct').textContent=pct+'%';
