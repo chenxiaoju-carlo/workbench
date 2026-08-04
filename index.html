@@ -302,6 +302,7 @@
     <div class="nav-item active" data-view="overview"><span class="ico">🏠</span><span class="lbl">概览</span></div>
     <div class="nav-item" data-view="eat"><span class="ico">🍱</span><span class="lbl">吃饭</span></div>
     <div class="nav-item" data-view="tasks"><span class="ico">✅</span><span class="lbl">每日必做</span></div>
+    <div class="nav-item" data-view="douyin"><span class="ico">🎬</span><span class="lbl">抖音方向</span></div>
     <div class="nav-item" data-view="ideas"><span class="ico">💡</span><span class="lbl">选题灵感</span></div>
     <div class="nav-item" data-view="trends"><span class="ico">🔥</span><span class="lbl">自媒体热点</span></div>
     <div class="nav-item" data-view="reading"><span class="ico">📚</span><span class="lbl">读书</span></div>
@@ -474,6 +475,24 @@
           <input id="newTask" placeholder="想加一条自己的计划？（选填）" style="flex:3" />
           <button class="btn" onclick="addTask()">+ 添加</button>
         </div>
+      </div>
+    </section>
+
+    <!-- DOUYIN -->
+    <section class="view" id="view-douyin">
+      <div class="card">
+        <h2>🎬 抖音方向 · 口播内容中枢</h2>
+        <p class="sub">你的口播弹药库：①赛道爆款拆解（贴对标视频链接+文案，AI 帮你写二创）②每日 20 条口播文案（带「怎么录」）③遇到好文案一键收藏 ④口播学习方法。数据手机电脑同步。当前赛道默认按「情感治愈/自我成长/生活方式」调教，可让我改成你的真实赛道。</p>
+        <div id="douyinTabs" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 14px">
+          <button class="tab active" data-dt="hot" onclick="switchDouyin('hot')">🔥 赛道爆款</button>
+          <button class="tab" data-dt="script" onclick="switchDouyin('script')">📝 每日口播</button>
+          <button class="tab" data-dt="star" onclick="switchDouyin('star')">⭐ 我的收藏</button>
+          <button class="tab" data-dt="learn" onclick="switchDouyin('learn')">🎓 学习方法</button>
+        </div>
+        <div id="dy-hot" class="dy-pane"></div>
+        <div id="dy-script" class="dy-pane" style="display:none"></div>
+        <div id="dy-star" class="dy-pane" style="display:none"></div>
+        <div id="dy-learn" class="dy-pane" style="display:none"></div>
       </div>
     </section>
 
@@ -1774,6 +1793,7 @@ function switchTab(v){
   if(v==='learning'){renderLearnDirs();renderLearnPick();renderLearnPath();renderLearn();renderFavSection('learning');}
   if(v==='insight'){renderReview();renderDailySummary();renderStats();renderHistoryChips();renderHistory(document.getElementById('histDate').value||todayStr());}
   if(v==='reading'){renderBookRecDaily();renderBooks();renderReadingAdvice();renderFavBooks();}
+  if(v==='douyin')renderDouyin();
   window.scrollTo(0,0);
 }
 function switchRTab(t){
@@ -3955,6 +3975,206 @@ function importData(arg){
 /* ---------- util ---------- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 
+/* ===================== 抖音方向（口播内容中枢） ===================== */
+/* 所有抖音数据都存进 state.favorites（source='douyin'），复用既有同步机制，
+   不动同步核心冻结区（doPush/mergeRemote/stateSig 等）。dtype: hot|script 区分类型，star 标记收藏。 */
+const DOUYIN_SYS='你是抖音口播爆款文案助手。用户用「变脸特效+口播」形式做个人号，赛道是情感治愈/自我成长/生活方式。文案要：①黄金3秒反常识钩子开头 ②情绪共鸣中段 ③价值/行动结尾 ④口语化、短句、适合对着镜头说。不要解释，只给文案正文。';
+const DOUYIN_SCRIPT_POOL=[
+ {title:'别再对自己这么狠',content:'你有没有发现，我们对别人都很温柔，对自己却最苛刻。明明已经很努力了，还要骂自己不够好。从今天起，把那句"我真没用"，换成"我今天做得还不错"。你先放过自己，世界才会放过你。',film:'变脸前皱眉自责，变脸后微笑释然，用表情反差强化"放过自己"。'},
+ {title:'白天有说有笑，晚上别内耗',content:'白天你是大家的开心果，晚上却一个人想东想西睡不着。其实你不是矫情，是白天憋太久没照顾自己。睡前把手机放远点，对自己说一句"今天辛苦了"。',film:'前半段表演"假装开心"，变脸后疲惫真实脸，靠近镜头说悄悄话。'},
+ {title:'你不是懒，你是太累了',content:'别再骂自己拖延。你不是懒，是心里装了太多事，能量被掏空了。今天允许自己慢一点，先做一件最小的事，动起来就好。',film:'变脸前瘫坐，变脸后坐直做一件小事（倒水/叠衣），节奏由慢到稳。'},
+ {title:'别拿别人的生活量自己',content:'刷到别人光鲜，就觉得自己一事无成？醒醒，你只看到了别人的高光，没看到人家的狼狈。你自己的节奏，刚刚好。',film:'变脸前刷手机羡慕脸，变脸后放下手机自信笑，手势"停"。'},
+ {title:'睡不着的夜里，试试这个',content:'睡不着别硬躺，越躺越焦虑。起来喝口温水，写下一桩明天的小事，告诉大脑"明天有安排，现在可以放心睡"。',film:'变脸前黑眼圈焦虑，变脸后温水杯+纸笔，语速放慢像哄睡。'},
+ {title:'讨好别人之前，先讨好自己',content:'你总怕得罪人，委屈自己成全别人。可你也不是谁的附属品。今天试着说一次"不"，你会发现天没塌。',film:'变脸前陪笑点头，变脸后坚定摇头说"不"，眼神直视镜头。'},
+ {title:'情绪不是矫情，是信号',content:'难过不是在示弱，是身体在提醒你：该歇歇了。允许自己哭一场，哭完继续走，这才叫坚强。',film:'变脸前强忍泪，变脸后释放，再变回平静微笑，三层表情递进。'},
+ {title:'把"我必须"换成"我选择"',content:'"我必须加班""我必须讨好"……这些词压得你喘不过气。换成"我选择"，瞬间你就拿回了主动权。',film:'变脸前被压垮，变脸后站直，重读"我选择"三字，语气上扬。'},
+ {title:'你不需要所有人都喜欢',content:'总有人看你不顺眼，那是他们的课题，不是你的。你只要对得起自己，剩下的随它去。',film:'变脸前在意旁人眼光左右看，变脸后专注看镜头，手势"拜拜"。'},
+ {title:'今天的小确幸，值得记下来',content:'哪怕是买到喜欢的水果、路上闻到桂花香。把微小快乐记下来，日子就不会只剩辛苦。',film:'变脸前平淡脸，变脸后眼睛一亮列举小确幸，语气轻快。'},
+ {title:'焦虑的时候，只看脚下这一步',content:'一想到未来就慌？别看那么远，只看脚下这一步。把今天过好，未来自己会来。',film:'变脸前仰望慌张，变脸后低头看路微笑，镜头下移再回正。'},
+ {title:'别把情绪憋成病',content:'有气就表达，有委屈就说。憋久了不是懂事，是把自己憋坏了。健康的关系，经得起真话。',film:'变脸前沉默忍让，变脸后开口表达，语气从弱到稳。'},
+ {title:'你比想象中扛造',content:'那些你以为过不去的坎，回头看都过去了。你没那么脆弱，你比自己以为的更能扛。',film:'变脸前回忆痛苦皱眉，变脸后释然，大拇指给自己"赞"。'},
+ {title:'停止和昨天的自己较劲',content:'昨天没做好就让它过去，今天是新的一页。你又不是昨天的你，别拿旧账罚现在的自己。',film:'变脸前翻旧账懊恼，变脸后撕掉纸页轻松，手势"重写"。'},
+ {title:'真正的自律，是好好休息',content:'不是逼自己5点起，是累了该睡就睡。会休息的人，才跑得远。',film:'变脸前硬撑黑眼圈，变脸后躺平舒适，打哈欠变笑。'},
+ {title:'你说话的样子，比内容重要',content:'口播不是背稿，是聊天。先把语气放软，像跟闺蜜说悄悄话，观众才愿意听。',film:'变脸前播音腔生硬，变脸后凑近镜头耳语，语气软下来。'},
+ {title:'先完成，再完美',content:'总想一条过？先拍一条烂的发出去。完成比完美重要，数据会教你下次怎么改。',film:'变脸前纠结重拍，变脸后一键发布潇洒，手势"发"。'},
+ {title:'评论区，就是你的选题库',content:'观众问什么，你就拍什么。把高频问题变成下一条视频，流量自然来。',film:'变脸前看评论惊喜，变脸后指着"下条拍这个"，列举问题。'},
+ {title:'黄金3秒，决定生死',content:'开头不抓人，划走没商量。第一句就抛反常识或痛点，别铺垫。',film:'变脸前平淡开场被划走，变脸后炸裂钩子开场，对比明显。'},
+ {title:'发布时间，藏着流量',content:'情感类晚上9-11点发，打工人刚躺平最好聊。选对时间，事半功倍。',film:'变脸前错峰石沉大海，变脸后准点发布数据起飞，简单演示。'},
+ {title:'变脸特效，用在情绪转折',content:'别为炫技而变脸。用在"伪装→真实""过去→现在"的转折，才有记忆点。',film:'演示一个情绪转折变脸，讲解"为什么这里变"。'},
+ {title:'你越真实，越有人爱',content:'装完美没人信，露破绽才亲切。说句"我也会崩"，反而圈粉。',film:'变脸前完美人设，变脸后自嘲真实，笑场也留着。'},
+ {title:'一条视频，只讲一件事',content:'别贪多。一条说清一个点，观众才记得住。贪全等于全没说。',film:'变脸前罗列一堆，变脸后聚焦"只讲一个"，手指比"1"。'},
+ {title:'坚持，是唯一的捷径',content:'别信爆款玄学。稳定更新、每条比上条好一点，时间会奖励长期主义。',film:'变脸前焦虑捷径，变脸后日历翻页坚持，结尾定格微笑。'}
+];
+const DOUYIN_LEARN=[
+ {t:'脚本结构：钩子-共鸣-行动',d:'每条口播都按这三段写。钩子=反常识/痛点（"你以为…其实…"）；共鸣="你是不是也…"；行动=给一个今晚就能做的小动作。30秒内讲完，别铺垫。'},
+ {t:'拍摄：变脸特效用在转折处',d:'变脸不是越多越好。把它放在"伪装→真实""昨天→今天""崩溃→自愈"的情绪转折，配合一句关键台词，记忆点最强。镜头先远后近，说完凑近像说悄悄话。'},
+ {t:'语感：像跟闺蜜聊天',d:'别播音腔。把语速放慢20%，重音落在情绪词上，该停顿就停顿。录之前先对着镜子讲一遍，自然了再拍。'},
+ {t:'发布：卡准时间段',d:'情感/治愈类晚9-11点发（打工人躺平最好聊）；自律/成长类早7-9点发。固定时间发，算法更容易记住你。'},
+ {t:'流量：评论区即选题',d:'每条发完看评论高频问题，直接变成下一条。回复评论也能拉互动权重。观众要什么你拍什么，比自嗨强十倍。'},
+ {t:'完播：前3秒定生死',d:'开头3秒必须抛钩子或痛点，别"大家好我是…"。能留住人，完播率上来，推荐才放大。'},
+ {t:'迭代：先完成再完美',d:'第一条允许拍得一般，发出去看数据：哪句被划走、哪句被点赞。用数据改下一条，比闷头打磨十条有用。'},
+ {t:'人设：真实>完美',d:'露破绽、说"我也会崩"，比装完美更圈粉。固定一个记忆点（你的口头禅/招牌表情），观众想起你就想起它。'}
+];
+const DOUYIN_LEARN_TIPS=[
+ '今天拍一条：用"你是不是也…"开头，讲一个你昨晚的真实小情绪。',
+ '今天练习：把一条稿子的开头改成反常识钩子，对比完播。',
+ '今天试试：在情绪最低处用一次变脸，看数据反馈。',
+ '今天做：发完去评论区找3个问题，存成下条选题。',
+ '今天练语感：对着镜子讲一遍再拍，录2条选更自然的。',
+ '今天卡点：晚上9:30发一条，记录24h播放对比。',
+ '今天复盘：找出一条划走率最高的，改开头重拍。',
+ '今天露真我：在一条里说一句"我也会崩"，看评论。',
+ '今天聚焦：一条只讲一个点，别贪多。',
+ '今天坚持：哪怕状态一般也发一条，稳定大于精致。'
+];
+function qa(s){return "'"+String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\\"')+"'";}
+function dyItems(type,date){return state.favorites.filter(f=>f.source==='douyin'&&(!type||f.dtype===type)&&(!date||f.createdAt===date));}
+function switchDouyin(t){
+  document.querySelectorAll('#douyinTabs .tab').forEach(el=>el.classList.toggle('active',el.dataset.dt===t));
+  ['hot','script','star','learn'].forEach(p=>{const e=document.getElementById('dy-'+p);if(e)e.style.display=(p===t?'block':'none');});
+  renderDouyin(t);
+}
+function renderDouyin(t){
+  t=t||(document.querySelector('#douyinTabs .tab.active')&&document.querySelector('#douyinTabs .tab.active').dataset.dt)||'hot';
+  if(t==='hot')renderDouyinHot();
+  else if(t==='script')renderDouyinScript();
+  else if(t==='star')renderDouyinStar();
+  else if(t==='learn')renderDouyinLearn();
+}
+function renderDouyinHot(){
+  const box=document.getElementById('dy-hot');if(!box)return;
+  const arr=dyItems('hot');
+  const form=`<div class="add-row" style="margin-bottom:10px">
+      <input id="dyHotUrl" placeholder="对标视频链接（如 https://v.douyin.com/...）" style="flex:2"/>
+      <input id="dyHotTitle" placeholder="视频标题/主题" style="flex:2"/>
+      <button class="btn" onclick="addDouyinHot()">＋ 添加</button>
+    </div>
+    <div class="add-row" style="margin-bottom:12px;align-items:stretch">
+      <textarea id="dyHotScript" placeholder="粘贴该视频的口播文案（没有也行，可点「写二创」让 AI 同主题原创）" style="flex:1;min-height:54px;border:1px solid var(--line);border-radius:11px;padding:10px;background:#fbfbff;font:inherit;resize:vertical"></textarea>
+    </div>`;
+  const list=arr.length?arr.map(it=>`
+    <div class="list-item">
+      <div class="body">
+        <div class="tt">${esc(it.title||'未命名')} ${it.url?`<a href="${esc(it.url)}" target="_blank" rel="noopener" style="color:var(--primary);font-weight:600">🔗 看视频</a>`:''}</div>
+        <div class="meta" style="white-space:pre-wrap;margin-top:6px">${it.content?esc(it.content):'<span style="color:var(--muted)">（暂无口播文案）</span>'}</div>
+        ${it.erchuang?`<div class="note-box" style="margin-top:8px"><b>🎬 二创文案：</b><br>${esc(it.erchuang)}</div>`:''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+        <button class="btn ghost sm" onclick="genErchuang(${qa(it.id)})">✨ 写二创</button>
+        <button class="btn ghost sm" onclick="toggleDouyinStar(${qa(it.id)})">${it.star?'⭐ 已收藏':'☆ 收藏'}</button>
+        <span class="x" onclick="delDouyin(${qa(it.id)})">✕</span>
+      </div>
+    </div>`).join(''):'<div class="empty">还没有对标视频。把你看中的爆款链接+文案贴进来，再点「写二创」就能拿到可直接拍的版本。（抖音有反爬限制，无法自动抓取，需你手动贴链接，或用下方 AI 按赛道实时生成）</div>';
+  box.innerHTML=form+list;
+}
+function addDouyinHot(){
+  const url=(document.getElementById('dyHotUrl').value||'').trim();
+  const title=(document.getElementById('dyHotTitle').value||'').trim();
+  const content=(document.getElementById('dyHotScript').value||'').trim();
+  if(!title&&!url){toast('至少填标题或链接');return;}
+  state.favorites.unshift({id:uid(),source:'douyin',dtype:'hot',title:title||'对标视频',url:url,content:content,erchuang:'',star:false,createdAt:todayStr(),ts:Date.now()});
+  const u=document.getElementById('dyHotUrl'),t=document.getElementById('dyHotTitle'),c=document.getElementById('dyHotScript');
+  if(u)u.value='';if(t)t.value='';if(c)c.value='';
+  save();renderDouyinHot();renderOverview();toast('已添加对标视频 🎬');
+}
+async function genErchuang(id){
+  const it=state.favorites.find(x=>x.id===id);if(!it)return;
+  const topic=it.title||'这个主题',base=it.content||'';
+  const sys=DOUYIN_SYS;
+  const umsg=base?('原文案：\n'+base+'\n\n请改写成二创版本（保留核心洞察，换角度/换例子/换钩子，避免抄袭）。'):('主题：'+topic+'\n\n请原创一段同主题的口播文案。');
+  let out;try{out=await callLLM(sys,umsg);}catch(e){out=null;}
+  if(!out){
+    out='（未配置 AI Key 的模板版）\n钩子：'+(base?base.slice(0,28):topic)+'……其实大多数人都不知道。\n共鸣：你是不是也这样？白天装没事，晚上却乱想。\n行动：从今天起，先把对自己最狠的那句话，换成温柔的一句。\n💡 在「设置 ⚙️」里配置 AI Key，可生成更贴合你变脸口播风格的二创。';
+  }
+  it.erchuang=out;save();renderDouyinHot();toast('二创文案已生成 ✨');
+}
+function renderDouyinScript(){
+  const box=document.getElementById('dy-script');if(!box)return;
+  const today=todayStr();
+  const arr=dyItems('script',today);
+  const head=`<div class="note-box" style="margin-bottom:12px">每天给你整理 20 条赛道口播文案+「怎么录」。配置了 AI Key 点下方生成会按你的赛道实时写；没 Key 则用内置灵感库按日期轮转。</div>
+    <div class="add-row" style="margin-bottom:14px">
+      <button class="btn" onclick="genDailyScripts()">✨ 生成今日 20 条口播文案</button>
+      <span class="meta" style="align-self:center">今日已生成：${arr.length} / 20</span>
+    </div>`;
+  const list=arr.length?arr.map((it,i)=>`
+    <div class="list-item">
+      <div class="body">
+        <div class="tt">${i+1}. ${esc(it.title||'口播文案')}</div>
+        <div class="meta" style="white-space:pre-wrap;margin-top:6px">${esc(it.content||'')}</div>
+        ${it.film?`<div class="meta" style="margin-top:6px;color:var(--primary)">🎥 怎么录：${esc(it.film)}</div>`:''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+        <button class="btn ghost sm" onclick="toggleDouyinStar(${qa(it.id)})">${it.star?'⭐ 已收藏':'☆ 收藏'}</button>
+        <span class="x" onclick="delDouyin(${qa(it.id)})">✕</span>
+      </div>
+    </div>`).join(''):'<div class="empty">今天还没生成。点上方按钮，立刻拿到 20 条可拍的口播文案。</div>';
+  box.innerHTML=head+list;
+}
+async function genDailyScripts(){
+  const today=todayStr();
+  const have=dyItems('script',today);
+  if(have.length>=20){ if(!window.confirm('今日已生成 '+have.length+' 条，确定重新生成并覆盖？'))return; state.favorites=state.favorites.filter(f=>!(f.source==='douyin'&&f.dtype==='script'&&f.createdAt===today)); }
+  let items=[];
+  if(state.settings.llmKey&&state.settings.llmBase){
+    toast('正在用 AI 生成今日 20 条…');
+    const umsg='请生成 20 条适合「变脸特效+口播」形式的短视频文案，赛道=情感治愈/自我成长/生活方式。每条包含：title（吸睛标题）、content（口播正文，80-160字，黄金3秒钩子+共鸣+行动）、film（一句话"怎么录"：镜头/表情/节奏建议）。严格只输出 JSON 数组，格式：[{"title":"","content":"","film":""},...]，不要其他文字。';
+    try{const raw=await callLLM(DOUYIN_SYS,umsg);if(raw){const m=raw.match(/\[[\s\S]*\]/);if(m)items=JSON.parse(m[0]);}}catch(e){items=[];}
+  }
+  if(!items||!items.length){
+    const pool=DOUYIN_SCRIPT_POOL,off=dateHash(today)%pool.length;
+    items=[];for(let i=0;i<20;i++)items.push(pool[(off+i)%pool.length]);
+  }
+  items.slice(0,20).forEach(it=>{state.favorites.unshift({id:uid(),source:'douyin',dtype:'script',title:it.title||'口播文案',content:it.content||'',film:it.film||'',star:false,createdAt:today,ts:Date.now()});});
+  save();renderDouyinScript();renderOverview();toast('已生成今日 20 条 ✨');
+}
+function renderDouyinStar(){
+  const box=document.getElementById('dy-star');if(!box)return;
+  const arr=state.favorites.filter(f=>f.source==='douyin'&&f.star);
+  const exp=arr.length?'<div class="add-row" style="margin-bottom:10px"><button class="btn ghost sm" onclick="exportDouyinStar()">📤 导出收藏</button></div>':'';
+  const list=arr.length?arr.map(it=>`
+    <div class="list-item">
+      <div class="body">
+        <div class="tt">${esc(it.title||'未命名')} ${it.dtype==='hot'&&it.url?`<a href="${esc(it.url)}" target="_blank" rel="noopener" style="color:var(--primary)">🔗</a>`:''} <span class="pill ${it.dtype==='hot'?'save':'local'}">${it.dtype==='hot'?'爆款':'口播'}</span></div>
+        <div class="meta" style="white-space:pre-wrap;margin-top:6px">${esc(it.content||'')}</div>
+        ${it.erchuang?`<div class="note-box" style="margin-top:8px"><b>二创：</b><br>${esc(it.erchuang)}</div>`:''}
+        ${it.film?`<div class="meta" style="margin-top:6px;color:var(--primary)">🎥 ${esc(it.film)}</div>`:''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+        <button class="btn ghost sm" onclick="toggleDouyinStar(${qa(it.id)})">☆ 取消收藏</button>
+        <span class="x" onclick="delDouyin(${qa(it.id)})">✕</span>
+      </div>
+    </div>`).join(''):'<div class="empty">还没有收藏。在「赛道爆款」或「每日口播」里点 ☆ 收藏，好文案都集中在这里。</div>';
+  box.innerHTML=exp+list;
+}
+function exportDouyinStar(){
+  const arr=state.favorites.filter(f=>f.source==='douyin'&&f.star);
+  if(!arr.length){toast('还没有收藏');return;}
+  const txt=arr.map(x=>`【${x.dtype==='hot'?'爆款':'口播'}】${x.title}\n${x.content||''}\n${x.erchuang?('二创：'+x.erchuang+'\n'):''}${x.film?('怎么录：'+x.film+'\n'):''}${x.url?('链接：'+x.url+'\n'):''}`).join('\n─────────\n\n');
+  const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='抖音收藏-'+todayStr()+'.txt';a.click();
+  toast('已导出收藏');
+}
+function toggleDouyinStar(id){
+  const it=state.favorites.find(x=>x.id===id);if(!it)return;
+  it.star=!it.star;save();
+  const t=document.querySelector('#douyinTabs .tab.active')&&document.querySelector('#douyinTabs .tab.active').dataset.dt||'hot';
+  if(t==='star')renderDouyinStar();else if(t==='hot')renderDouyinHot();else renderDouyinScript();
+  renderOverview();toast(it.star?'已收藏 ⭐':'已取消收藏');
+}
+function delDouyin(id){state.favorites=state.favorites.filter(x=>x.id!==id);save();renderDouyin();renderOverview();}
+function renderDouyinLearn(){
+  const box=document.getElementById('dy-learn');if(!box)return;
+  const tip=DOUYIN_LEARN_TIPS[dateHash(todayStr())%DOUYIN_LEARN_TIPS.length];
+  const cards=DOUYIN_LEARN.map(c=>`
+    <div class="list-item" style="display:block">
+      <div class="tt">${esc(c.t)}</div>
+      <div class="meta" style="white-space:pre-wrap;margin-top:6px">${esc(c.d)}</div>
+    </div>`).join('');
+  box.innerHTML=`<div class="note-box" style="margin-bottom:14px"><b>📌 今日口播练习：</b>${esc(tip)}</div>
+    <h3 style="margin:6px 0 10px">口播学习方法（照做就能稳定产出）</h3>${cards}`;
+}
+
 /* ---------- render all ---------- */
 function fullRender(){
   hideBootLoading();
@@ -3963,6 +4183,7 @@ function fullRender(){
   renderTrends();renderFavSection('trend');renderReview();renderBooks();renderBookRecDaily();renderReadingAdvice();renderFavBooks();
   renderMood();renderPlans();renderLearn();
   renderPlanDirs();renderLearnDirs();renderLearnPick();renderLearnPath();renderFavSection('learning');renderStats();
+  renderDouyin();
 }
 
 /* ---------- init ---------- */
