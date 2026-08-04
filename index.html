@@ -915,11 +915,18 @@ const SEED_META={};
 DAILY_SEEDS.forEach(n=>SEED_META[n]={cat:'daily',weekday:null});
 WEEKLY_SEEDS.forEach(w=>SEED_META[w.name]={cat:'weekly',weekday:w.weekday});
 function seedTaskObj(n){return {id:uid(),name:n,cat:SEED_META[n].cat,weekday:SEED_META[n].weekday,doneDates:{},chat:[]};}
-/* 废弃旧任务：用户 2026-07-30 明确要求「彻底删除」（此前要求'历史不丢'的例外）。
-   这些是从旧版迁移/重复残留、非用户有效自定义；其中两条(公众号选题+输出、［旧计划］9点早起打卡)
-   已被新版 10 种子覆盖。migrate 每次加载都移除，保证每日计划只显示这 10 条种子；
-   同步核心(mergeRemote)为并集冻结、不可改，故靠 migrate 兜底清理，云端另做一次性的清理 PUT。 */
-const CLEANUP_TASK_NAMES=['每个账号内容发布','找一个新的选题','今日读书','做一餐好吃的饭','每日养生饮品','古法运动40分钟','［旧计划］9点早起打卡','公众号选题+输出'];
+/* 彻底清理的 task 名字：用户 2026-08-04 明确要求「每日必做模块删除，云端的也不要了」。
+   覆盖三类：(a) 2026-07-30 redesign 前的 8 条废弃旧任务；(b) redesign 引入的 10 条种子（7 每日+3 每周）；
+   (c) 任何带「（旧计划）」前缀的衍生任务。
+   同步核心(mergeRemote)为并集冻结不可改，故靠 migrate 每次加载都 filter 兜底清理；
+   云端也由 deploy 脚本做一次性清理 PUT（保留其他所有字段）。*/
+const CLEANUP_TASK_NAMES=[
+  // (a) 8 条废弃旧任务
+  '每个账号内容发布','找一个新的选题','今日读书','做一餐好吃的饭','每日养生饮品','古法运动40分钟','［旧计划］9点早起打卡','公众号选题+输出',
+  // (b) 10 条种子（7 每日 + 3 每周）
+  '早起：坚持9点','小红书：笔记发布（互动+攻略）','公众号：收集选题，输出文章','抖音：口播（学习如何做+实操+发布）','读书：读一个章节','饮食：自己做饭+饮品，坚决不吃夜宵','运动：古法运动50分钟',
+  '小红书：找新的互动话题（每周找2-3条）','公众号：准备本周的素材','抖音：找新的口播素材'
+];
 /* 每个计划的离线教练引导：无需 AI 密钥即可给出「今天具体怎么做」的步骤/建议。
    有 AI 密钥时仍优先走大模型；无密钥时作为兜底引导，满足「每计划可对话、能给我建议/引导」。
    key 与 SEED_TASKS 完全一致。 */
@@ -1460,7 +1467,7 @@ function initState(){
     version:2,
     _seeded:true, /* 标记这是初始种子数据：同步时不应与云端合并成重复，且应优先采用云端 */
     tasksDate:todayStr(),
-    tasks:SEED_TASKS.map(seedTaskObj),
+    tasks:[], /* 2026-08-04：用户明确删除「每日必做」模块，不再 seed 任何任务；用户自定义任务由用户自己后续在「新的计划」里加 */
     streak:0,lastDoneAll:null,
     ideas:[],verified:VERIFIED_TOPICS.map(v=>({id:uid(),t:v.t,why:v.why||'',tip:v.tip||''})),posts:[],reading:[],plans:[],learning:[],moods:[],favorites:[],
     dailyLog:{},
@@ -1793,7 +1800,6 @@ function renderOverview(){
   const done=_due.filter(t=>doneOn(t,_t)).length,total=_due.length;
   const pct=total?Math.round(done/total*100):0;
   document.getElementById('statGrid').innerHTML=`
-    <div class="stat"><div class="n">${done}/${total}</div><div class="l">今日任务完成</div></div>
     <div class="stat"><div class="n">${state.ideas.length}</div><div class="l">选题灵感</div></div>
     <div class="stat"><div class="n">${state.verified?state.verified.length:0}</div><div class="l">已验证爆款</div></div>
     <div class="stat"><div class="n">${state.posts.length}</div><div class="l">工作复盘</div></div>
@@ -2606,12 +2612,6 @@ function renderDailySummary(){
   const postsToday=state.posts.filter(p=>p.date===d).length;
   const mood=state.moods.filter(m=>m.date===d).slice(-1)[0];
   const focus=[];
-  if(tasks.length){
-    const undone=tasks.filter(t=>!t.done);
-    focus.push({t:'任务收尾',d:`今日任务 ${done}/${tasks.length} 已完成，还剩 ${undone.length} 条没打卡。优先把高优先级的做完再收工，别让今日待办滚到明天。`});
-  }else{
-    focus.push({t:'先定计划',d:'今天还没建任务清单，去「新的计划」模块规划今天的重点事项，做完一项就记录一项。'});
-  }
   if(ideasToday||postsToday){
     focus.push({t:'内容产出',d:`今天已存 ${ideasToday} 条选题、写 ${postsToday} 次复盘，趁热打铁把它们拍成笔记发出去，别让弹药堆在库房。`});
   }else{
@@ -2628,7 +2628,6 @@ function renderDailySummary(){
   if(fBox)fBox.innerHTML='<ul style="margin:0;padding-left:18px;line-height:1.75">'+focus.map(f=>`<li><b>${esc(f.t)}：</b>${esc(f.d)}</li>`).join('')+'</ul>';
   const sBox=document.getElementById('dailyStatMini');
   if(sBox)sBox.innerHTML='<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">'
-    +statCard('今日任务',done+'/'+tasks.length)
     +statCard('选题(今日)',ideasToday)
     +statCard('复盘(今日)',postsToday)
     +statCard('读书(今日)',booksToday)
@@ -2807,7 +2806,6 @@ function renderStats(){
   const tagHtml=tags.map(([t,c])=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><span style="width:52px;font-size:12px;color:#555">${esc(t)}</span><div style="flex:1;height:12px;background:#eee;border-radius:6px;overflow:hidden"><div style="width:${Math.round(c/maxT*100)}%;height:100%;background:#BA7517"></div></div><span style="font-size:12px;color:#888">${c}</span></div>`).join('')||'<div class="empty">还没有读书记录</div>';
   box.innerHTML=`
     <div class="row2" style="margin-bottom:16px">
-      ${statCard('今日任务',doneToday+'/'+totalTasks)}
       ${statCard('灵感',ideas)}
       ${statCard('读书',books)}
       ${statCard('收藏',favs)}
