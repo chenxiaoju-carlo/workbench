@@ -300,7 +300,6 @@
   <aside class="sidebar">
     <div class="brand"><div class="logo">🌿</div><span>陈小菊的工作台</span></div>
     <div class="nav-item active" data-view="overview"><span class="ico">🏠</span><span class="lbl">概览</span></div>
-    <div class="nav-item" data-view="tasks"><span class="ico">✅</span><span class="lbl">每日必做</span></div>
     <div class="nav-item" data-view="eat"><span class="ico">🍱</span><span class="lbl">吃饭</span></div>
     <div class="nav-item" data-view="ideas"><span class="ico">💡</span><span class="lbl">选题灵感</span></div>
     <div class="nav-item" data-view="trends"><span class="ico">🔥</span><span class="lbl">自媒体热点</span></div>
@@ -388,27 +387,6 @@
           <button class="btn ghost" onclick="pushSync()">☁️ 上传同步</button>
           <button class="btn ghost" onclick="pullSync()">☁️ 下载同步</button>
           <input type="file" id="importFile" accept="application/json" style="display:none" onchange="importData(event)" />
-        </div>
-      </div>
-    </section>
-
-    <!-- TASKS -->
-    <section class="view" id="view-tasks">
-      <div class="card" id="makeupCard" style="display:none;background:#fff5f5;border-color:#f0c0c0">
-        <div id="makeupBanner"></div>
-      </div>
-
-      <div class="card">
-        <h2>✅ 每日必做</h2>
-        <p class="sub">做到了就打勾 ✅；没做到的会记下来，第二天狠狠提醒你补齐。每周任务只在对应星期出现（周二抖音素材 / 周三公众号素材 / 周四小红书互动话题）。点 💬 和 AI 聊今天怎么做更好。</p>
-        <div class="progress-wrap">
-          <div class="progress-txt"><span id="taskProgTxt2">0 / 0 完成</span><span id="taskProgPct2">0%</span></div>
-          <div class="progress-bar"><i id="taskProgBar2" style="width:0%"></i></div>
-        </div>
-        <div id="taskList"></div>
-        <div class="add-row">
-          <input id="newTask" placeholder="添加新任务，例如：写一篇小红书笔记" onkeydown="if(event.key==='Enter')addTask()" />
-          <button class="btn" onclick="addTask()">+ 新增</button>
         </div>
       </div>
     </section>
@@ -1750,7 +1728,6 @@ function switchTab(v){
   document.querySelectorAll('.nav-item').forEach(el=>el.classList.toggle('active',el.dataset.view===v));
   document.querySelectorAll('.view').forEach(s=>s.classList.remove('active'));
   document.getElementById('view-'+v).classList.add('active');
-  if(v==='tasks')renderTasks();
   if(v==='eat')renderDailyPlan();
   if(v==='ideas'){renderIdeaToday();renderVerified();renderFavSection('idea');}
   if(v==='trends')renderTrends();
@@ -1782,11 +1759,11 @@ function switchRTab(t){
 /* ---------- motivation (狠狠督促) ---------- */
 function renderMotivation(){
   const _t=todayStr();
-  const _due=state.tasks.filter(t=>isDueOn(t,_t));
+  const _due=state.tasks.filter(t=>!isSeedTask(t)&&isDueOn(t,_t));
   const done=_due.filter(t=>doneOn(t,_t)).length,total=_due.length;
   const remain=total-done;
   let title,sub,line;
-  if(total===0){title='陈小菊，先加几个任务吧！';sub='';line='别发呆，现在就列今天的计划 💥';}
+  if(total===0){title='新的一天，慢慢来 🌿';sub='';line='把今天过好——记录下你的心情、读过的书、做完的复盘就好。';}
   else if(done===0){
     title='陈小菊！你今天一个任务都还没动 ⚠️';
     sub=`今天有 ${total} 件事等着你，拖延症最怕你「现在就开始」。`;
@@ -1812,7 +1789,7 @@ function renderMotivation(){
 /* ---------- overview ---------- */
 function renderOverview(){
   const _t=todayStr();
-  const _due=state.tasks.filter(t=>isDueOn(t,_t));
+  const _due=state.tasks.filter(t=>!isSeedTask(t)&&isDueOn(t,_t));
   const done=_due.filter(t=>doneOn(t,_t)).length,total=_due.length;
   const pct=total?Math.round(done/total*100):0;
   document.getElementById('statGrid').innerHTML=`
@@ -2300,6 +2277,7 @@ function genWeekSummaryAI(){
 
 /* ---------- tasks + chat ---------- */
 function renderTasks(){
+  if(!document.getElementById('taskList'))return; /* 模块已删除：无容器则安全跳过，避免崩溃 */
   const today=todayStr();
   const due=state.tasks.filter(t=>isDueOn(t,today)); /* 仅显示今天应做的（每周任务只在对应星期出现） */
   const done=due.filter(t=>doneOn(t,today)).length,total=due.length;
@@ -2632,7 +2610,7 @@ function renderDailySummary(){
     const undone=tasks.filter(t=>!t.done);
     focus.push({t:'任务收尾',d:`今日任务 ${done}/${tasks.length} 已完成，还剩 ${undone.length} 条没打卡。优先把高优先级的做完再收工，别让今日待办滚到明天。`});
   }else{
-    focus.push({t:'先定计划',d:'今天还没建任务清单，去「每日必做」先列 3 条「必须完成」的事，完成即打卡。'});
+    focus.push({t:'先定计划',d:'今天还没建任务清单，去「新的计划」模块规划今天的重点事项，做完一项就记录一项。'});
   }
   if(ideasToday||postsToday){
     focus.push({t:'内容产出',d:`今天已存 ${ideasToday} 条选题、写 ${postsToday} 次复盘，趁热打铁把它们拍成笔记发出去，别让弹药堆在库房。`});
@@ -2660,7 +2638,7 @@ function genInsight(){
   const box=document.getElementById('insightOut');if(!box)return;
   const d=todayStr();
   const _d0=todayStr();
-  const tasks=state.tasks.filter(t=>isDueOn(t,_d0)).map(t=>({name:t.name,done:!!(t.doneDates&&t.doneDates[_d0])}));
+  const tasks=state.tasks.filter(t=>!isSeedTask(t)&&isDueOn(t,_d0)).map(t=>({name:t.name,done:!!(t.doneDates&&t.doneDates[_d0])}));
   const ideas=state.ideas.slice(-5).map(i=>i.text);
   const trends=(TRENDS_DB||[]).slice(0,6).map(t=>t.topic||t.title||'');
   const reading=state.reading.slice(-3).map(b=>b.book+(b.note?('：'+b.note):''));
@@ -2749,7 +2727,7 @@ function genMorningReport(force){
   if(box.dataset.loading==='1')return; /* 防止重复请求 */
   box.dataset.loading='1';
   const _d0=todayStr();
-  const tasks=state.tasks.filter(t=>isDueOn(t,_d0)).map(t=>({name:t.name,done:!!(t.doneDates&&t.doneDates[_d0])}));
+  const tasks=state.tasks.filter(t=>!isSeedTask(t)&&isDueOn(t,_d0)).map(t=>({name:t.name,done:!!(t.doneDates&&t.doneDates[_d0])}));
   const ideas=state.ideas.slice(-5).map(i=>i.text);
   const favTitles=state.favorites.slice(0,8).map(f=>f.title);
   const trends=(TRENDS_DB||[]).slice(0,5).map(t=>t.topic||t.title||'');
@@ -2815,7 +2793,7 @@ function svgLine(data){
 function renderStats(){
   const box=document.getElementById('statsBox');if(!box)return;
   const _d1=todayStr();
-  const _due1=state.tasks.filter(t=>isDueOn(t,_d1));
+  const _due1=state.tasks.filter(t=>!isSeedTask(t)&&isDueOn(t,_d1));
   const totalTasks=_due1.length;
   const doneToday=_due1.filter(t=>doneOn(t,_d1)).length;
   const ideas=state.ideas.length,books=state.reading.length,favs=state.favorites.length;
