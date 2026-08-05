@@ -493,7 +493,7 @@
         <div id="dy-realtime" class="dy-pane"></div>
         <div id="dy-hot" class="dy-pane" style="display:none"></div>
         <div id="dy-extract" class="dy-pane" style="display:none">
-          <div class="note-box" style="margin-bottom:12px">⚠️ <b>关于「自动提取」：</b>抖音有反爬，免费静态页<b>没法直接抓取视频里的语音台词</b>。所以流程是：① 点「🔗 在抖音打开」去看视频 → ② 把视频里的字幕/口播<b>复制粘贴</b>进下方文本框（抖音自带字幕，长按即可复制）→ ③ 点「✨ 生成二创」直接出可拍稿。「🤖 尝试自动提取」会尽力调免费接口拿视频<b>简介</b>文案，连不上就走粘贴，不会出现空白假象。</div>
+          <div class="note-box" style="margin-bottom:12px">⚠️ <b>关于「自动提取」：</b>抖音有反爬，免费静态页<b>没法直接抓视频语音台词</b>，但能提取视频的<b>标题/简介文案</b>。用法：① 把微信里复制的抖音<b>分享口令或链接</b>贴到上方框（自动识别链接）；② 点「🔗 在抖音打开」可去看视频字幕；③ 点「🤖 尝试自动提取」——优先调免费接口、失败自动转网页解析兜底，拿到文案后核对补全；④ 点「✨ 生成二创」直接出可拍稿。接口不稳定时手动粘贴字幕也行，绝不造假空白。</div>
           <div class="add-row">
             <input id="dyExtractUrl" placeholder="粘贴抖音分享链接（选填：用于「在抖音打开」+ 自动提取简介）" style="flex:3"/>
             <button class="btn" onclick="openInDouyin()">🔗 在抖音打开</button>
@@ -4166,25 +4166,52 @@ function openInDouyin(){
   if(!u){toast('先粘贴抖音分享链接');return;}
   window.open(u,'_blank','noopener');
 }
+function parseDouyinUrl(text){
+  if(!text)return null;
+  const m=text.match(/https?:\/\/[^\s"'）)】\u3000]+/);
+  if(m){let u=m[0].replace(/[）)】]+$/,'');if(/douyin\.com|iesdouyin|tiktok/.test(u))return u.startsWith('http')?u:('https://'+u);}
+  const s=text.match(/v\.douyin\.com\/[A-Za-z0-9]+\/?/);
+  if(s)return 'https://'+s[0];
+  return null;
+}
+function pickScriptText(obj){
+  const all=[];
+  (function walk(v){
+    if(typeof v==='string'){const s=v.trim();
+      if(s.length>=12 && /[\u4e00-\u9fff]/.test(s) && !/^https?:\/\//.test(s) && !s.startsWith('<') && s.length<3000) all.push(s);
+    } else if(Array.isArray(v)){v.forEach(walk);}
+    else if(v&&typeof v==='object'){for(const k in v)walk(v[k]);}
+  })(obj);
+  const scripts=all.filter(s=>/[。！？!?…]/.test(s));
+  const pool=scripts.length?scripts:all;
+  if(!pool.length)return '';
+  pool.sort((a,b)=>b.length-a.length);
+  return pool.slice(0,2).join('\n\n');
+}
+function parseDouyinHtml(html){
+  let m=html.match(/id="RENDER_DATA"[^>]*>([^<]+)</);
+  if(m){try{const j=JSON.parse(decodeURIComponent(m[1]));const t=pickScriptText(j);if(t)return t;}catch(e){}}
+  m=html.match(/__INIT_PROPS__\s*=\s*'([^']+)'/);
+  if(m){try{const j=JSON.parse(m[1]);const t=pickScriptText(j);if(t)return t;}catch(e){}}
+  return '';
+}
+async function tryExtract(apiUrl){
+  try{const r=await fetch(apiUrl);if(!r.ok)return '';const j=await r.json();const obj=j&&j.data?j.data:j;return pickScriptText(obj);}catch(e){return '';}
+}
+async function tryExtractHtml(proxyUrl){
+  try{const r=await fetch(proxyUrl);if(!r.ok)return '';const html=await r.text();return parseDouyinHtml(html);}catch(e){return '';}
+}
 async function doExtractText(){
-  const u=document.getElementById('dyExtractUrl').value.trim();
-  if(!u){toast('先粘贴抖音分享链接再试自动提取');return;}
-  toast('⏳ 正在尝试自动提取文案（免费接口，可能连不上）…');
+  const raw=document.getElementById('dyExtractUrl').value.trim();
+  const u=parseDouyinUrl(raw);
+  if(!u){toast('没找到抖音链接，请粘贴包含抖音链接的分享文本');return;}
+  toast('⏳ 正在提取文案（自动接口 → 网页解析兜底）…');
   const ta=document.getElementById('dyExtractText');
-  try{
-    const r=await fetch('https://api.vvhan.com/api/douyin?url='+encodeURIComponent(u));
-    if(!r.ok)throw new Error('http '+r.status);
-    const j=await r.json();
-    const d=j&&j.data?j.data:(j||{});
-    const parts=[];
-    ['desc','text','content','caption','title','author','summary'].forEach(k=>{if(d[k]&&typeof d[k]==='string'&&d[k].trim())parts.push(d[k].trim());});
-    const txt=parts.join('\n\n');
-    if(txt){ta.value=txt;toast('✅ 自动提取到文案（请核对/补全）');}
-    else{ta.value='';toast('自动提取没拿到正文，请手动粘贴视频字幕');}
-  }catch(e){
-    ta.value='';
-    toast('自动提取连不上（接口限流/跨域）。请手动复制视频字幕粘贴，更稳。');
-  }
+  let txt=await tryExtract('https://api.codelife.cc/api/douyin/video.json?url='+encodeURIComponent(u));
+  if(!txt)txt=await tryExtract('https://api.vvhan.com/api/douyin?url='+encodeURIComponent(u));
+  if(!txt)txt=await tryExtractHtml('https://api.allorigins.win/raw?url='+encodeURIComponent(u));
+  if(txt){ta.value=txt;toast('✅ 已提取到视频文案（请核对/补全）');}
+  else{ta.value='';toast('自动提取暂时连不上（免费接口不稳定）。请手动把视频字幕粘贴进来，更稳。');}
 }
 async function genExtractErchuang(){
   const ta=document.getElementById('dyExtractText');
@@ -4268,7 +4295,7 @@ async function fetchRealtimeHot(force){
   if(!state.settings.llmKey||!state.settings.llmBase){box.innerHTML='<div class="empty">⚠️ AI 未配置。请确认你账号里的 AI Key 可用（已在智谱 glm-4-flash 上验证 OK），或刷新页面让同步生效。</div>';return;}
   box.innerHTML='<div class="empty">⏳ AI 正在生成今日 20 条赛道热门格式口播内容（约 10-30 秒）…</div>';
   const sys=DOUYIN_SYS;
-  const umsg='你是抖音内容策略师 + 爆款编剧。当前月份=2026-08。基于你掌握的 2026 年抖音当下真实热门规律（不依赖外部接口），为【情感治愈 / 自我成长 / 生活方式】口播赛道（用户用「变脸特效」形式）生成 20 条"今日热门格式"的内容弹药，每条都像当下抖音正在火的视频一样可直接拍。\n\n严格只输出 JSON 数组，每条对象包含字段：\n- "title"：标题，像真实热门视频的标题（吸睛、有反差、20 字以内）\n- "content"：完整口播文案正文，150-250 字，必须有"黄金 3 秒反常识钩子开头 + 情绪共鸣中段 + 行动/价值结尾"，口语化、短句、适合对着镜头用变脸特技说\n- "film"：拍摄方式（一句话 30-60 字）：景别（近景/特写）、表情与变脸时机、节奏快慢、BGM 类型建议\n\n要求：20 条主题尽量不重复，覆盖当下热门方向（反内耗/情绪疗愈/自我接纳/关系边界/原生家庭/独居/年龄焦虑/微小确幸/深夜自愈/停止自我攻击等）。只输出 JSON 数组，不要任何其他文字。';
+  const umsg='你是抖音内容策略师 + 爆款编剧。当前月份=2026-08。基于你掌握的 2026 年抖音当下真实热门规律（不依赖外部接口），为【情感治愈 / 自我成长 / 生活方式】口播赛道（用户用「变脸特效」形式）生成 20 条"今日热门格式"的内容弹药，每条都像当下抖音正在火的视频一样可直接拍。\n\n严格只输出 JSON 数组，每条对象包含字段：\n- "title"：标题，像真实热门视频的标题（吸睛、有反差、20 字以内）\n- "content"：完整口播文案正文，150-250 字，必须有"黄金 3 秒反常识钩子开头 + 情绪共鸣中段 + 行动/价值结尾"，口语化、短句、适合对着镜头用变脸特技说\n- "film"：拍摄方式（一句话 30-60 字）：景别（近景/特写）、表情与变脸时机、节奏快慢、BGM 类型建议\n- "method"：拍摄方法（更详细 60-120 字）：开头/中段/结尾各怎么演、灯光背景剪辑建议\n\n要求：20 条主题尽量不重复，覆盖当下热门方向（反内耗/情绪疗愈/自我接纳/关系边界/原生家庭/独居/年龄焦虑/微小确幸/深夜自愈/停止自我攻击等）。只输出 JSON 数组，不要任何其他文字。';
   let items=[];
   try{const raw=await callLLM(sys,umsg);if(raw){const m=raw.match(/\[[\s\S]*\]/);if(m)items=JSON.parse(m[0]);}}catch(e){items=[];}
   if(!items||!items.length){
@@ -4285,7 +4312,7 @@ async function fetchRealtimeHot(force){
     items=[];for(let i=0;i<20;i++)items.push(fb[i%fb.length]);
     toast('AI 暂不可用，已用内置 8 条模板循环');
   }
-  const c={date:today,source:'ai',items:items.slice(0,20).map((it,i)=>({rank:i+1,title:it.title||'热门',content:it.content||'',film:it.film||'',favId:null})),ts:Date.now()};
+  const c={date:today,source:'ai',items:items.slice(0,20).map((it,i)=>({rank:i+1,title:it.title||'热门',content:it.content||'',film:it.film||'',method:it.method||'',erchuang:'',erFilm:'',erMethod:'',favId:null})),ts:Date.now()};
   saveRealtimeCache(c);renderRealtime(c);
   if(items.length>=20&&items[0].title)toast('已生成今日 20 条 ✨');
 }
@@ -4294,7 +4321,7 @@ function renderRealtime(cache){
   const today=todayStr();
   const fresh=cache&&cache.date===today;
   const head=`<div class="note-box" style="margin-bottom:14px">
-    🔥 <b>今日赛道热门</b>（AI 按当下真实热门规律原创 · ${fresh?'已是今日最新':'非今日'} · 共 ${cache.items.length} 条）。<b>这些是当下抖音正在用的热门格式口播稿，原创不抄、直接对镜拍</b>，每条点「🎬 二创」拿变体。
+    🔥 <b>今日赛道热门</b>（AI 按当下真实热门规律原创 · ${fresh?'已是今日最新':'非今日'} · 共 ${cache.items.length} 条）。<b>这些是当下抖音正在用的热门格式口播稿，原创不抄、直接对镜拍</b>，每条点「🎬 二创（可直接拍）」直接出可拍稿（保留原文对照）。
     ${fresh?'<button class="btn ghost sm" style="margin-left:8px" onclick="fetchRealtimeHot(true)">🔄 重新生成今日</button>':''}
   </div>
   <div style="margin-bottom:12px;padding:10px 12px;background:#f5f7ff;border-radius:10px;color:var(--muted);font-size:12px;line-height:1.6">💡 <b>为什么是 AI 原创而不是"抓取视频原文案"：</b>抖音有强反爬限制，视频里的话必须用服务端语音识别（ASR）才能转写成文字，免费静态页做不到。所以本模块用 AI 按当下真实热门规律原创——内容是当下热门格式、原创不侵权、拍完直接可用，效果等价于"模仿热门 + 不抄"。</div>`;
@@ -4302,12 +4329,22 @@ function renderRealtime(cache){
     <div class="list-item">
       <div class="body">
         <div class="tt"><span class="pill local">#${it.rank}</span> ${esc(it.title||'热门')}</div>
-        <div class="note-box" style="margin-top:8px;white-space:pre-wrap"><b>📝 完整口播文案：</b><br>${esc(it.content||'')}</div>
+        <div class="note-box" style="margin-top:8px;white-space:pre-wrap"><b>📝 热门口播文案（原文）：</b><br>${esc(it.content||'')}</div>
         ${it.film?`<div class="meta" style="margin-top:8px;color:var(--primary);white-space:pre-wrap">🎥 <b>拍摄方式：</b>${esc(it.film)}</div>`:''}
-        ${it.favId?'<div class="meta" style="margin-top:6px;color:#0a0">已收藏到「我的收藏」 ✓</div>':''}
+        ${it.method?`<div class="meta" style="margin-top:6px;color:var(--primary);white-space:pre-wrap">🎬 <b>拍摄方法：</b>${esc(it.method)}</div>`:''}
+        ${it.erchuang?`<div class="note-box" style="margin-top:10px;background:#eef7ee;border-color:#bfe3bf;white-space:pre-wrap">
+          <b>✨ 二创稿（可直接拍）：</b><br>${esc(it.erchuang)}
+          ${it.erFilm?`<div style="margin-top:6px;color:var(--primary)">🎥 ${esc(it.erFilm)}</div>`:''}
+          ${it.erMethod?`<div style="margin-top:6px;color:var(--primary)">🎬 ${esc(it.erMethod)}</div>`:''}
+          <div class="add-row" style="margin-top:8px">
+            <button class="btn ghost sm" onclick="copyRealtimeErchuang(${it.rank})">📋 复制二创</button>
+            <button class="btn ghost sm" onclick="rtErchuangStar(${it.rank})">⭐ 收藏二创</button>
+          </div>
+        </div>`:''}
+        ${it.favId?'<div class="meta" style="margin-top:6px;color:#0a0">原热门已收藏到「我的收藏」 ✓</div>':''}
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
-        <button class="btn ghost sm" onclick="genRealtimeErchuang(${it.rank})">🎬 二创</button>
+        <button class="btn ghost sm" onclick="genRealtimeErchuang(${it.rank})">${it.erchuang?'🎬 重新二创':'🎬 二创（可直接拍）'}</button>
         <button class="btn ghost sm" onclick="rtStarToggle(${it.rank})">${rtStarStatus(it.rank)?'⭐ 已收藏':'☆ 收藏'}</button>
         <span class="x" onclick="rtDel(${it.rank})">✕</span>
       </div>
@@ -4336,17 +4373,34 @@ async function genRealtimeErchuang(rank){
   rank=Number(rank);
   const c=loadRealtimeCache();if(!c)return;
   const it=(c.items||[]).find(x=>x.rank===rank);if(!it)return;
+  if(!state.settings.llmKey||!state.settings.llmBase){toast('AI 未配置，无法生成二创');return;}
+  toast('⏳ 正在生成可直接拍的二创稿（约 10-20 秒）…');
   const sys=DOUYIN_SYS;
-  const umsg=`基于这条热门口播，写一个变体版本：\n原标题：${it.title}\n原文案：${it.content}\n原拍摄方式：${it.film}\n\n要求：保留核心情绪洞察，换角度/换例子/换钩子开头，重新写一篇 150-250 字完整口播文案 + 新的拍摄方式。严格只输出 JSON 对象：{"title":"...","content":"...","film":"..."}，不要其他文字。`;
+  const umsg=`基于这条赛道热门口播，写一篇"二创"口播稿——换角度/换例子/换钩子开头，但保留可共鸣的情绪点，适合用「变脸特效」对着镜头拍：\n原标题：${it.title}\n原文案：${it.content}\n原拍摄方式：${it.film}\n\n严格只输出 JSON 对象：{"title":"二创主题(带情绪关键词)","content":"完整口播文案 150-250 字，黄金3秒反常识钩子开头+情绪共鸣中段+行动/价值结尾，口语化短句","film":"拍摄方式(30-60字)：景别/表情与变脸时机/节奏/BGM","method":"拍摄方法(60-120字)：开头/中段/结尾怎么演、灯光背景剪辑建议"}，不要其他文字。`;
   let parsed=null;
   try{
     const out=await callLLM(sys,umsg);
     if(out){const m=out.match(/\{[\s\S]*\}/);if(m){try{parsed=JSON.parse(m[0]);}catch(e){parsed=null;}}}
-    if(!parsed)parsed={title:it.title,content:out,film:it.film};
-  }catch(e){parsed={title:it.title,content:it.content,film:it.film};toast('AI 暂不可用，二创未变化');}
-  it.title=parsed.title||it.title;it.content=parsed.content||it.content;it.film=parsed.film||it.film;
-  if(it.favId){const f=state.favorites.find(x=>x.id===it.favId);if(f){f.title=it.title;f.content=it.content;f.film=it.film;}}
-  save();saveRealtimeCache(c);renderRealtime(c);renderOverview();toast('二创已生成 ✨');
+    if(!parsed)parsed={title:'二创·'+it.title,content:out,film:it.film,method:it.method};
+  }catch(e){toast('AI 暂不可用，二创未生成');return;}
+  it.erchuang=parsed.content||it.content;
+  it.erFilm=parsed.film||it.film;
+  it.erMethod=parsed.method||it.method;
+  if(it.favId){const f=state.favorites.find(x=>x.id===it.favId);if(f){f.erchuang=it.erchuang;f.film=it.erFilm;f.method=it.erMethod;}}
+  save();saveRealtimeCache(c);renderRealtime(c);renderOverview();toast('二创稿已生成，可直接拍 ✨');
+}
+function copyRealtimeErchuang(rank){
+  rank=Number(rank);const c=loadRealtimeCache();if(!c)return;
+  const it=(c.items||[]).find(x=>x.rank===rank);if(!it||!it.erchuang){toast('先生成二创');return;}
+  const txt=`${it.title}\n\n${it.erchuang}\n\n${it.erFilm?('怎么录：'+it.erFilm+'\n'):''}${it.erMethod?('拍摄方法：'+it.erMethod+'\n'):''}`;
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(()=>toast('已复制 ✅'),()=>fallbackCopy(txt));}
+  else fallbackCopy(txt);
+}
+function rtErchuangStar(rank){
+  rank=Number(rank);const c=loadRealtimeCache();if(!c)return;
+  const it=(c.items||[]).find(x=>x.rank===rank);if(!it||!it.erchuang){toast('先生成二创再收藏');return;}
+  const f={id:uid(),source:'douyin',dtype:'extract',title:it.title+'（二创）',content:it.erchuang,film:it.erFilm,method:it.erMethod,erchuang:'',star:true,createdAt:todayStr(),ts:Date.now(),realtime:true};
+  state.favorites.unshift(f);save();renderOverview();toast('二创已收藏到「⭐ 我的收藏」 ⭐');
 }
 
 /* ---------- render all ---------- */
