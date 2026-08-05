@@ -482,15 +482,30 @@
     <section class="view" id="view-douyin">
       <div class="card">
         <h2>🎬 抖音方向 · 口播内容中枢</h2>
-        <p class="sub">你的口播弹药库：🔥<b>实时热榜</b>——每天 20 条今日赛道热门格式的<完整可拍口播文案 + 拍摄方式>，每条可一键「二创」拿变体；🎯<b>赛道爆款</b>——每天 20 条经过验证的赛道爆款模板（主题 + 完整文案 + 拍摄方式 + 拍摄方法），内容丰富、可直接对镜拍；⭐<b>我的收藏</b>收藏好的，二选一导出；🎓<b>学习方法</b>稳定上热门。数据手机电脑同步。<b>AI 用你账号里已配的智谱 glm-4-flash（已验证可用），你不用再进设置。</b></p>
+        <p class="sub">你的口播弹药库：🔥<b>实时热榜</b>——每天 20 条今日赛道热门格式的<完整可拍口播文案 + 拍摄方式>，每条可一键「二创」拿变体；🎯<b>赛道爆款</b>——每天 20 条经过验证的赛道爆款模板（主题 + 完整文案 + 拍摄方式 + 拍摄方法），内容丰富、可直接对镜拍；⭐<b>我的收藏</b>收藏好的，二选一导出；🎓<b>学习方法</b>稳定上热门；📋<b>提取二创</b>——把你看到的视频文案贴进来（或点「在抖音打开」去看），一键出可直接拍的二创稿。数据手机电脑同步。<b>AI 用你账号里已配的智谱 glm-4-flash（已验证可用），你不用再进设置。</b></p>
         <div id="douyinTabs" style="display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 14px">
           <button class="tab active" data-dt="realtime" onclick="switchDouyin('realtime')">🔥 实时热榜</button>
           <button class="tab" data-dt="hot" onclick="switchDouyin('hot')">🎯 赛道爆款</button>
+          <button class="tab" data-dt="extract" onclick="switchDouyin('extract')">📋 提取二创</button>
           <button class="tab" data-dt="star" onclick="switchDouyin('star')">⭐ 我的收藏</button>
           <button class="tab" data-dt="learn" onclick="switchDouyin('learn')">🎓 学习方法</button>
         </div>
         <div id="dy-realtime" class="dy-pane"></div>
         <div id="dy-hot" class="dy-pane" style="display:none"></div>
+        <div id="dy-extract" class="dy-pane" style="display:none">
+          <div class="note-box" style="margin-bottom:12px">⚠️ <b>关于「自动提取」：</b>抖音有反爬，免费静态页<b>没法直接抓取视频里的语音台词</b>。所以流程是：① 点「🔗 在抖音打开」去看视频 → ② 把视频里的字幕/口播<b>复制粘贴</b>进下方文本框（抖音自带字幕，长按即可复制）→ ③ 点「✨ 生成二创」直接出可拍稿。「🤖 尝试自动提取」会尽力调免费接口拿视频<b>简介</b>文案，连不上就走粘贴，不会出现空白假象。</div>
+          <div class="add-row">
+            <input id="dyExtractUrl" placeholder="粘贴抖音分享链接（选填：用于「在抖音打开」+ 自动提取简介）" style="flex:3"/>
+            <button class="btn" onclick="openInDouyin()">🔗 在抖音打开</button>
+            <button class="btn ghost" onclick="doExtractText()">🤖 尝试自动提取</button>
+          </div>
+          <p class="sub" style="margin-top:10px">把视频里的口播文案 / 字幕粘贴到下面（这是 AI 二创的原材料）：</p>
+          <textarea id="dyExtractText" class="txt" rows="6" placeholder="例如：你有没有发现，我们对别人都很温柔，对自己却最苛刻……"></textarea>
+          <div class="add-row" style="margin-top:8px">
+            <button class="btn primary" onclick="genExtractErchuang()">✨ 生成二创口播文案（可直接拍）</button>
+          </div>
+          <div id="dyExtractOut"></div>
+        </div>
         <div id="dy-star" class="dy-pane" style="display:none"></div>
         <div id="dy-learn" class="dy-pane" style="display:none"></div>
       </div>
@@ -4005,7 +4020,7 @@ function qa(s){return "'"+String(s==null?'':s).replace(/\\/g,'\\\\').replace(/'/
 function dyItems(type,date){return state.favorites.filter(f=>f.source==='douyin'&&(!type||f.dtype===type)&&(!date||f.createdAt===date));}
 function switchDouyin(t){
   document.querySelectorAll('#douyinTabs .tab').forEach(el=>el.classList.toggle('active',el.dataset.dt===t));
-  ['realtime','hot','star','learn'].forEach(p=>{const e=document.getElementById('dy-'+p);if(e)e.style.display=(p===t?'block':'none');});
+  ['realtime','hot','extract','star','learn'].forEach(p=>{const e=document.getElementById('dy-'+p);if(e)e.style.display=(p===t?'block':'none');});
   renderDouyin(t);
 }
 function renderDouyin(t){
@@ -4014,6 +4029,7 @@ function renderDouyin(t){
   t=t||(document.querySelector('#douyinTabs .tab.active')&&document.querySelector('#douyinTabs .tab.active').dataset.dt)||'realtime';
   if(t==='realtime'){const c=loadRealtimeCache();if(c&&c.date===todayStr()&&c.items&&c.items.length)renderRealtime(c);else fetchRealtimeHot();}
   else if(t==='hot'){const c=loadTrackCache();if(c&&c.date===todayStr()&&c.items&&c.items.length)renderTrackHot(c);else renderTrackHot(c);}
+  else if(t==='extract')renderDouyinExtract();
   else if(t==='star')renderDouyinStar();
   else if(t==='learn')renderDouyinLearn();
 }
@@ -4115,7 +4131,7 @@ function renderDouyinStar(){
   const box=document.getElementById('dy-star');if(!box)return;
   const arr=state.favorites.filter(f=>f.source==='douyin'&&f.star);
   const exp=arr.length?'<div class="add-row" style="margin-bottom:10px"><button class="btn ghost sm" onclick="exportDouyinStar()">📤 导出收藏</button></div>':'';
-  const label=it=>it.dtype==='hot'?'爆款':(it.dtype==='track'?'赛道':'口播');
+  const label=it=>it.dtype==='extract'?'二创':(it.dtype==='hot'?'爆款':(it.dtype==='track'?'赛道':'口播'));
   const list=arr.length?arr.map(it=>`
     <div class="list-item">
       <div class="body">
@@ -4135,16 +4151,93 @@ function renderDouyinStar(){
 function exportDouyinStar(){
   const arr=state.favorites.filter(f=>f.source==='douyin'&&f.star);
   if(!arr.length){toast('还没有收藏');return;}
-  const txt=arr.map(x=>`【${x.dtype==='hot'?'爆款':'口播'}】${x.title}\n${x.content||''}\n${x.erchuang?('二创：'+x.erchuang+'\n'):''}${x.film?('怎么录：'+x.film+'\n'):''}${x.url?('链接：'+x.url+'\n'):''}`).join('\n─────────\n\n');
+  const txt=arr.map(x=>`【${x.dtype==='extract'?'二创':(x.dtype==='hot'?'爆款':(x.dtype==='track'?'赛道':'口播'))}】${x.title}\n${x.content||''}\n${x.erchuang?('二创：'+x.erchuang+'\n'):''}${x.film?('怎么录：'+x.film+'\n'):''}${x.url?('链接：'+x.url+'\n'):''}`).join('\n─────────\n\n');
   const blob=new Blob([txt],{type:'text/plain;charset=utf-8'});
   const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='抖音收藏-'+todayStr()+'.txt';a.click();
   toast('已导出收藏');
+}
+/* 提取二创：用户粘贴视频口播文案（或自动提取简介）→ AI 二创可直接拍的口播稿 */
+function renderDouyinExtract(){
+  const box=document.getElementById('dy-extract');if(!box)return;
+  /* 静态 UI 已在 HTML 中，输出区 dyExtractOut 由生成动作填充 */
+}
+function openInDouyin(){
+  const u=document.getElementById('dyExtractUrl').value.trim();
+  if(!u){toast('先粘贴抖音分享链接');return;}
+  window.open(u,'_blank','noopener');
+}
+async function doExtractText(){
+  const u=document.getElementById('dyExtractUrl').value.trim();
+  if(!u){toast('先粘贴抖音分享链接再试自动提取');return;}
+  toast('⏳ 正在尝试自动提取文案（免费接口，可能连不上）…');
+  const ta=document.getElementById('dyExtractText');
+  try{
+    const r=await fetch('https://api.vvhan.com/api/douyin?url='+encodeURIComponent(u));
+    if(!r.ok)throw new Error('http '+r.status);
+    const j=await r.json();
+    const d=j&&j.data?j.data:(j||{});
+    const parts=[];
+    ['desc','text','content','caption','title','author','summary'].forEach(k=>{if(d[k]&&typeof d[k]==='string'&&d[k].trim())parts.push(d[k].trim());});
+    const txt=parts.join('\n\n');
+    if(txt){ta.value=txt;toast('✅ 自动提取到文案（请核对/补全）');}
+    else{ta.value='';toast('自动提取没拿到正文，请手动粘贴视频字幕');}
+  }catch(e){
+    ta.value='';
+    toast('自动提取连不上（接口限流/跨域）。请手动复制视频字幕粘贴，更稳。');
+  }
+}
+async function genExtractErchuang(){
+  const ta=document.getElementById('dyExtractText');
+  const src=(ta.value||'').trim();
+  if(!src){toast('请先把视频口播文案粘贴/提取到上方文本框');return;}
+  if(!state.settings.llmKey||!state.settings.llmBase){toast('AI 未配置，无法生成');return;}
+  toast('⏳ 正在生成二创口播文案（约 10-20 秒）…');
+  const sys=DOUYIN_SYS;
+  const umsg=`下面是一条抖音同赛道视频的口播原文：\n"""${src}"""\n\n请基于它的核心情绪洞察与结构，写一篇"二创"口播文案——换角度/换例子/换钩子，但保留可共鸣的情绪点，适合用「变脸特效」对着镜头拍。\n严格只输出 JSON 对象：{"title":"二创主题(带情绪关键词，一句话)","content":"完整口播文案 180-280 字，黄金3秒反常识钩子开头+情绪共鸣中段+行动/价值结尾，口语化短句","film":"拍摄方式(30-60字)：景别/表情与变脸时机/节奏/BGM","method":"拍摄方法(60-120字)：开头/中段/结尾怎么演、灯光背景剪辑建议"}，不要其他文字。`;
+  let p=null;
+  try{
+    const out=await callLLM(sys,umsg);
+    if(out){const m=out.match(/\{[\s\S]*\}/);if(m){try{p=JSON.parse(m[0]);}catch(e){p=null;}}}
+    if(!p)p={title:'二创口播',content:out,film:'',method:''};
+  }catch(e){toast('AI 暂不可用：'+e.message);return;}
+  const title=p.title||'二创口播';
+  const content=(p.content||'').trim();
+  const film=(p.film||'').trim();
+  const method=(p.method||'').trim();
+  const out=document.getElementById('dyExtractOut');
+  out.innerHTML=`
+    <div class="list-item" style="margin-top:14px">
+      <div class="body">
+        <div class="tt">✨ ${esc(title)} <span class="pill local">二创</span></div>
+        <div class="meta" style="white-space:pre-wrap;margin-top:6px">${esc(content)}</div>
+        ${film?`<div class="meta" style="margin-top:6px;color:var(--primary)">🎥 ${esc(film)}</div>`:''}
+        ${method?`<div class="meta" style="margin-top:6px;color:var(--primary)">🎬 ${esc(method)}</div>`:''}
+        <div class="add-row" style="margin-top:8px">
+          <button class="btn ghost sm" onclick="copyExtractOut()">📋 复制二创文案</button>
+          <button class="btn ghost sm" onclick="starExtractOut()">⭐ 收藏到我的收藏</button>
+        </div>
+      </div>
+    </div>`;
+  window.__extractCur={title,content,film,method,src};
+  toast('二创已生成 ✨');
+}
+function copyExtractOut(){
+  const c=window.__extractCur;if(!c){toast('先生成二创');return;}
+  const txt=`${c.title}\n\n${c.content}\n\n${c.film?('怎么录：'+c.film+'\n'):''}${c.method?('拍摄方法：'+c.method+'\n'):''}`;
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(()=>toast('已复制 ✅'),()=>fallbackCopy(txt));}
+  else fallbackCopy(txt);
+}
+function fallbackCopy(t){const ta=document.createElement('textarea');ta.value=t;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');toast('已复制 ✅');}catch(e){toast('复制失败，请手动选择');}document.body.removeChild(ta);}
+function starExtractOut(){
+  const c=window.__extractCur;if(!c){toast('先生成二创');return;}
+  const f={id:uid(),source:'douyin',dtype:'extract',title:c.title,content:c.content,film:c.film,method:c.method,erchuang:'',star:true,createdAt:todayStr(),ts:Date.now()};
+  state.favorites.unshift(f);save();renderOverview();toast('已收藏到「⭐ 我的收藏」 ⭐');
 }
 function toggleDouyinStar(id){
   const it=state.favorites.find(x=>x.id===id);if(!it)return;
   it.star=!it.star;save();
   const t=document.querySelector('#douyinTabs .tab.active')&&document.querySelector('#douyinTabs .tab.active').dataset.dt||'realtime';
-  if(t==='star')renderDouyinStar();else if(t==='hot')renderTrackHot();else if(t==='realtime')renderRealtime(loadRealtimeCache());else renderDouyinLearn();
+  if(t==='star')renderDouyinStar();else if(t==='hot')renderTrackHot();else if(t==='realtime')renderRealtime(loadRealtimeCache());else if(t==='extract')renderDouyinExtract();else renderDouyinLearn();
   renderOverview();toast(it.star?'已收藏 ⭐':'已取消收藏');
 }
 function delDouyin(id){state.favorites=state.favorites.filter(x=>x.id!==id);save();renderDouyin();renderOverview();}
