@@ -4071,6 +4071,15 @@ function renderTrackHot(cache){
         <div class="note-box" style="margin-top:8px;white-space:pre-wrap"><b>📝 完整内容文案：</b><br>${esc(it.content||'')}</div>
         ${it.film?`<div class="meta" style="margin-top:8px;color:var(--primary);white-space:pre-wrap">🎬 <b>拍摄方式：</b>${esc(it.film)}</div>`:''}
         ${it.method?`<div class="meta" style="margin-top:6px;color:var(--primary);white-space:pre-wrap">🎥 <b>拍摄方法：</b>${esc(it.method)}</div>`:''}
+        ${it.erchuang?`<div class="note-box" style="margin-top:10px;background:#eef7ee;border-color:#bfe3bf;white-space:pre-wrap">
+          <b>✨ 二创稿（可直接拍）：</b><br>${esc(it.erchuang)}
+          ${it.erFilm?`<div style="margin-top:6px;color:var(--primary)">🎬 ${esc(it.erFilm)}</div>`:''}
+          ${it.erMethod?`<div style="margin-top:6px;color:var(--primary)">🎥 ${esc(it.erMethod)}</div>`:''}
+          <div class="add-row" style="margin-top:8px">
+            <button class="btn ghost sm" onclick="copyTrackErchuang(${it.rank})">📋 复制二创</button>
+            <button class="btn ghost sm" onclick="trackErchuangStar(${it.rank})">⭐ 收藏二创</button>
+          </div>
+        </div>`:''}
         ${it.favId?'<div class="meta" style="margin-top:6px;color:#0a0">已收藏到「我的收藏」 ✓</div>':''}
       </div>
       <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
@@ -4080,6 +4089,7 @@ function renderTrackHot(cache){
       </div>
     </div>`).join(''):'';
   box.innerHTML=head+list;
+  autoFillDouyinErchuang('track',cache);
 }
 async function genTrackHot20(force){
   const today=todayStr();
@@ -4119,16 +4129,30 @@ async function genTrackErchuang(rank){
   const c=loadTrackCache();if(!c)return;
   const it=(c.items||[]).find(x=>x.rank===rank);if(!it)return;
   const sys=DOUYIN_SYS;
-  const umsg=`基于这条赛道爆款模板，写一个变体版本：\n主题：${it.theme}\n原文：${it.content}\n原拍摄方式：${it.film}\n\n要求：保留核心情绪洞察，换角度/换例子/换钩子开头，重新写一篇 180-280 字的完整口播文案 + 新的拍摄方式 + 新的拍摄方法。严格只输出 JSON 对象：{"theme":"...","content":"...","film":"...","method":"..."}，不要其他文字。`;
+  if(!state.settings.llmKey||!state.settings.llmBase){toast('AI 未配置，无法生成二创');return;}
+  toast('⏳ 正在重新生成二创稿（约 10-20 秒）…');
+  const umsg=`基于这条赛道爆款模板，写一个"二创"口播稿——换角度/换例子/换钩子开头，但保留可共鸣的情绪点，适合用「变脸特效」对镜拍：\n主题：${it.theme}\n原文：${it.content}\n\n严格只输出 JSON 对象：{"erchuang":"完整口播文案 180-260 字，黄金3秒反常识钩子开头+情绪共鸣中段+行动/价值结尾，口语化短句","erFilm":"拍摄方式(30-60字)：景别/变脸时机/节奏/BGM","erMethod":"拍摄方法(60-120字)：开头/中段/结尾怎么演、灯光背景剪辑建议"}，不要其他文字。`;
   let parsed=null;
   try{
     const out=await callLLM(sys,umsg);
     if(out){const m=out.match(/\{[\s\S]*\}/);if(m){try{parsed=JSON.parse(m[0]);}catch(e){parsed=null;}}}
-    if(!parsed)parsed={theme:it.theme,content:out,film:it.film,method:it.method};
-  }catch(e){parsed={theme:it.theme,content:it.content,film:it.film,method:it.method};toast('AI 暂不可用，二创未变化');}
-  it.theme=parsed.theme||it.theme;it.content=parsed.content||it.content;it.film=parsed.film||it.film;it.method=parsed.method||it.method;
-  if(it.favId){const f=state.favorites.find(x=>x.id===it.favId);if(f){f.title=it.theme;f.content=it.content;f.film=it.film;f.method=it.method;}}
-  save();saveTrackCache(c);renderTrackHot(c);renderOverview();toast('二创已生成 ✨');
+    if(!parsed)parsed={erchuang:it.erchuang,erFilm:it.erFilm,erMethod:it.erMethod};
+  }catch(e){toast('AI 暂不可用，二创未变化');return;}
+  it.erchuang=parsed.erchuang||it.erchuang;it.erFilm=parsed.erFilm||it.erFilm;it.erMethod=parsed.erMethod||it.erMethod;
+  save();saveTrackCache(c);renderTrackHot(c);renderOverview();toast('二创已重新生成 ✨');
+}
+function copyTrackErchuang(rank){
+  rank=Number(rank);const c=loadTrackCache();if(!c)return;
+  const it=(c.items||[]).find(x=>x.rank===rank);if(!it||!it.erchuang){toast('先生成二创');return;}
+  const txt=`${it.theme}\n\n${it.erchuang}\n\n${it.erFilm?('怎么录：'+it.erFilm+'\n'):''}${it.erMethod?('拍摄方法：'+it.erMethod+'\n'):''}`;
+  if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(()=>toast('已复制 ✅'),()=>fallbackCopy(txt));}
+  else fallbackCopy(txt);
+}
+function trackErchuangStar(rank){
+  rank=Number(rank);const c=loadTrackCache();if(!c)return;
+  const it=(c.items||[]).find(x=>x.rank===rank);if(!it||!it.erchuang){toast('先生成二创再收藏');return;}
+  const f={id:uid(),source:'douyin',dtype:'extract',title:it.theme+'（二创）',content:it.erchuang,film:it.erFilm,method:it.erMethod,erchuang:'',star:true,createdAt:todayStr(),ts:Date.now(),realtime:false};
+  state.favorites.unshift(f);save();renderOverview();toast('二创已收藏到「⭐ 我的收藏」 ⭐');
 }
 /* 批量生成二创：一次 LLM 调用为多条热门口播生成二创（分块避免输出截断），直接附在每条下面，无需逐条点击 */
 async function genDouyinErchuangBatch(kind,c){
@@ -4152,6 +4176,16 @@ async function genDouyinErchuangBatch(kind,c){
   if(kind==='realtime'){saveRealtimeCache(c);renderRealtime(c);}else{saveTrackCache(c);renderTrackHot(c);}
   renderOverview();
   if(done)toast('二创已全部生成，可直接拍 ✨');else toast('二创自动生成失败（热门已生成），可逐条点「重新二创」');
+}
+/* 渲染时若发现条目缺二创（老缓存升级 / 上次失败），自动补生成，无需用户点按钮 */
+function autoFillDouyinErchuang(kind,cache){
+  const items=(cache&&cache.items)||[];
+  if(!items.length)return;
+  if(!items.some(it=>!it.erchuang))return;
+  if(!state.settings.llmKey||!state.settings.llmBase){return;}
+  if(window._dyErcBusy)return;
+  window._dyErcBusy=true;
+  genDouyinErchuangBatch(kind,cache).catch(()=>{}).finally(()=>{window._dyErcBusy=false;});
 }
 function renderDouyinStar(){
   const box=document.getElementById('dy-star');if(!box)return;
@@ -4400,6 +4434,7 @@ function renderRealtime(cache){
       </div>
     </div>`).join('');
   box.innerHTML=head+list;
+  autoFillDouyinErchuang('realtime',cache);
 }
 function rtStarStatus(rank){
   const c=loadRealtimeCache();if(!c)return false;
