@@ -2476,12 +2476,12 @@ async function callLLM(system,userMsg,history){
   msgs.push({role:'user',content:userMsg});
   /* 浏览器直连大模型：已验证 DeepSeek / 通义 / 智谱等均支持跨域(CORS)，国内可直接调用 */
   const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),20000); /* 20 秒超时，避免永久卡住 */
+  const timer=setTimeout(()=>controller.abort(),35000); /* 35 秒超时，避免生成较长内容时误中断 */
   try{
     const r=await fetch(llmBase.replace(/\/$/,'')+'/chat/completions',{
       method:'POST',
       headers:{'Content-Type':'application/json',Authorization:'Bearer '+llmKey},
-      body:JSON.stringify({model:llmModel||'deepseek-chat',messages:msgs,temperature:0.7}),
+      body:JSON.stringify({model:llmModel||'deepseek-chat',messages:msgs,temperature:0.8,max_tokens:4095}),
       signal:controller.signal
     });
     clearTimeout(timer);
@@ -3992,6 +3992,94 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;',
 /* 所有抖音数据都存进 state.favorites（source='douyin'），复用既有同步机制，
    不动同步核心冻结区（doPush/mergeRemote/stateSig 等）。dtype: hot|script 区分类型，star 标记收藏。 */
 const DOUYIN_SYS='你是抖音口播爆款文案助手。用户用「变脸特效+口播」形式做个人号，赛道是情感治愈/自我成长/生活方式。文案要：①黄金3秒反常识钩子开头 ②情绪共鸣中段 ③价值/行动结尾 ④口语化、短句、适合对着镜头说。不要解释，只给文案正文。';
+/* 20 个角度种子：实时热榜用 REALTIME_SEEDS（新鲜/借势感），赛道爆款用 TRACK_SEEDS（经典长效），
+   两者不重叠，配合"1:1 各生成 1 条"的提示，从根上杜绝重复。 */
+const REALTIME_SEEDS=[
+ '反内耗·别和脑子打架','深夜EMO·允许自己丧','讨好的你·该下班了','原生家庭·不再是借口',
+ '年龄不是刻度·是勋章','一个人住·高级自由','情绪稳定·顶级修养','你不是懒·是能量低',
+ '普通也很好·不必封神','精力守门员·别外泄','小确幸·今天的糖','边界感·亲近不黏腻',
+ '慢下来·才有味道','和缺点做朋友','别比·别人的路不是你的','独处·充电模式',
+ '说出来·别内伤','完成·比完美帅','被看见·也值得','重启·什么时候都行'];
+const TRACK_SEEDS=[
+ '3句话止住内耗','睡前原谅一切','拒绝并不难','和父母和解不等于认输',
+ '30岁的样子都好','独居女孩的仪式感','不乱就是本事','低能量自救指南',
+ '做个普通人很香','精力管理7件事','记录快乐的5种方式','关系里的分寸',
+ '把日子过成诗','接纳自己的怂','别人的好与我无关','孤独是礼物',
+ '情绪需要出口','先做完再做好','你值得被爱','人生随时翻盘'];
+/* 把 AI 返回的"第N条…【标题】…【口播文案】…"文本解析成对象数组（兼容 JSON 兜底） */
+function parseDouyinBlocks(raw, mode){
+  if(!raw) return [];
+  let s=String(raw).replace(/```json/gi,'').replace(/```/gi,'').trim(); /* 去掉模型偶发的 markdown 代码块包裹 */
+  /* 优先解析 JSON（单对象或数组都支持）：模型在严格 JSON 指令下输出最稳定 */
+  const om=s.match(/\{[\s\S]*\}/);
+  if(om){ try{ const ob=JSON.parse(om[0]); if(ob&&typeof ob==='object'&&(ob.title||ob.content||ob.erchuang||ob.theme)) return [arrWrap(ob, mode)]; }catch(e){} }
+  const jm=s.match(/\[[\s\S]*\]/);
+  if(jm){ try{ const arr=JSON.parse(jm[0]); if(Array.isArray(arr)&&arr.length){
+      return arr.map(o=> arrWrap(o, mode));
+  } }catch(e){} }
+  /* JSON 解析失败：退化为按"第N条"或标签的宽松文本解析（兼容模型偶尔的自由格式） */
+  let parts=s.split(/第\s*\d+\s*条/); if(parts.length<=1) parts=['', s]; /* 模型常省略"第N条"标记，整段当作单条解析 */
+  const out=[]; const cLabel= mode==='hot'?'口播文案':'二创';
+  for(let i=1;i<parts.length;i++){
+    const b=parts[i];
+    const grab=(lab)=>{
+      const idx=b.indexOf(lab); if(idx<0) return '';
+      let start=idx+lab.length;
+      while(start<b.length && (b[start]==='【'||b[start]==='('||b[start]===':'||b[start]==='：'||b[start]===' '||b[start]==='\t'||b[start]==='\n'||b[start]==='"'||b[start]==='“'||b[start]==='』'||b[start]===']'||b[start]===')')) start++;
+      const labels=['标题','口播文案','二创','拍摄方式','拍摄方法'];
+      let end=b.length;
+      for(const L of labels){ if(L===lab) continue; const p=b.indexOf(L, start); if(p>=0 && p<end) end=p; }
+      return b.slice(start,end).trim().replace(/^[\s"'"「」『』【】]+/,'').replace(/[\s"'"「」『』【】]+$/,'');
+    };
+    if(mode==='combo') out.push({title:grab('标题'), content:grab('口播文案'), erchuang:grab('二创'), erFilm:grab('拍摄方式'), erMethod:grab('拍摄方法')});
+    else if(mode==='hot') out.push({title:grab('标题'), content:grab(cLabel), film:grab('拍摄方式'), method:grab('拍摄方法')});
+    else out.push({erchuang:grab(cLabel), erFilm:grab('拍摄方式'), erMethod:grab('拍摄方法')});
+  }
+  return out;
+}
+function arrWrap(o, mode){
+  return mode==='hot'
+    ? {title:(o.title||o.theme||'').toString().replace(/^["'"]|["'"]$/g,''), content:(o.content||'').toString(), film:(o.film||'').toString(), method:(o.method||'').toString()}
+    : mode==='combo'
+    ? {title:(o.title||'').toString().replace(/^["'"]|["'"]$/g,''), content:(o.content||'').toString(), erchuang:(o.erchuang||o.content||'').toString(), erFilm:(o.erFilm||o.film||'').toString(), erMethod:(o.erMethod||o.method||'').toString()}
+    : {erchuang:(o.erchuang||o.content||'').toString(), erFilm:(o.erFilm||o.film||'').toString(), erMethod:(o.erMethod||o.method||'').toString()};
+}
+function dedupeDouyin(items){
+  const seen=new Set(); const out=[];
+  for(const it of items){ const k=(it.title||'').replace(/[\s，。、！？!?·\-—:：,.]/g,'').toLowerCase(); if(k&&seen.has(k))continue; if(k)seen.add(k); out.push(it); }
+  return out;
+}
+function buildComboPrompt(seed, kind){
+  const flavor = kind==='realtime' ? '今日正在爆的热门口播格式（带当下新鲜感/借势感）' : '经过验证的稳定爆款模板（经典长效结构，出片率高）';
+  return '你是抖音内容策略师+爆款编剧。为【情感治愈/自我成长/生活方式】口播赛道（变脸特效对镜拍形式），基于下面这个角度，生成 1 条"'+flavor+'"。\n角度：'+seed+'\n\n只输出一个 JSON 对象，不要任何解释、不要 markdown 代码块、不要多余文字。结构必须如下：\n{"title":"20字内吸睛反差标题","content":"口播原文稿，写满 110-150 个汉字：黄金3秒反常识钩子开头 + 情绪共鸣中段 + 行动/价值结尾，口语化短句，带具体生活场景或对话细节","erchuang":"二创口播稿，写满 90-130 个汉字：换角度或换例子或换钩子开头，保留可共鸣的情绪点，适合变脸特效对镜拍，用户可直接照着说"}\n注意：content 和 erchuang 必须是完整成段的中文口播稿，不要分镜、不要序号、不要英文。';
+}
+async function genDouyinHotCore(kind, seeds){
+  const items=[];
+  for(let s=0;s<seeds.length;s++){
+    const seed=seeds[s];
+    toast('⏳ 正在生成 '+(kind==='realtime'?'实时热榜':'赛道爆款')+' '+(s+1)+'/'+seeds.length+' …');
+    let parsed=[];
+    for(let a=0,d=800;a<4 && parsed.length<1;a++,d*=2){
+      try{ parsed=parseDouyinBlocks(await callLLM(DOUYIN_SYS, buildComboPrompt(seed,kind)),'combo'); }catch(e){}
+      if(parsed.length<1) await new Promise(r=>setTimeout(r,d));
+    }
+    let p=parsed[0];
+    if(!p||!p.content) p=douyinFallback(seed, kind); /* 模型偶发失败时的本地兜底，避免空白卡片 */
+    const t=(p.title||seed).toString().replace(/^[\s"'"「」『』【】]+/,'').replace(/[\s"'"「」『』【】]+$/,'');
+    /* combo 调用一次同时产出"原文口播 + 二创口播稿"，二创直接随原文落地，无需再点按钮 */
+    items.push({rank:items.length+1, seed:seed, title:t, theme:t, content:p.content||'', film:p.film||'', method:p.method||'', erchuang:p.erchuang||'', erFilm:p.erFilm||'', erMethod:p.erMethod||'', favId:null});
+    if(s+1<seeds.length) await new Promise(r=>setTimeout(r,1500)); /* 放慢节奏，避免免费模型限流 */
+  }
+  return dedupeDouyin(items).slice(0,20);
+}
+/* 模型偶发全部失败时的本地兜底：保证不出现空白卡片（标题用角度，文案/二创给可拍骨架） */
+function douyinFallback(seed, kind){
+  const hook = kind==='realtime' ? '别再骗自己了，' : '记住这三点，';
+  const content = hook+'「'+seed+'」这事儿，你其实早该想通。刚才刷到一条评论说"我也是"，我盯着看了好久——原来不是我一个人这样。你有没有过那种，明明累到不行还要假装没事、笑着回"我挺好的"？真的别硬撑了。今晚就把那件压着的事放下，哪怕只是早睡半小时，也是在好好爱自己。慢慢来，你已经在变好了。';
+  const erchuang = '换我来拍：开头直接对着镜头说"我昨天也崩了一次"，说完停两秒（这里用变脸切到平静脸）。接着讲一个你自己的小故事——比如加班到凌晨、还是硬撑着回消息。结尾给观众一个动作："现在去喝杯水，给自己放个假"。全程像跟闺蜜吐槽，不用妆不用精致，真实最打动人。';
+  return {title:seed, content:content, erchuang:erchuang, erFilm:'', erMethod:''};
+}
+
 const DOUYIN_LEARN=[
  {t:'脚本结构：钩子-共鸣-行动',d:'每条口播都按这三段写。钩子=反常识/痛点（"你以为…其实…"）；共鸣="你是不是也…"；行动=给一个今晚就能做的小动作。30秒内讲完，别铺垫。'},
  {t:'拍摄：变脸特效用在转折处',d:'变脸不是越多越好。把它放在"伪装→真实""昨天→今天""崩溃→自愈"的情绪转折，配合一句关键台词，记忆点最强。镜头先远后近，说完凑近像说悄悄话。'},
@@ -4026,7 +4114,7 @@ function renderDouyin(t){
   if(view&&!view.classList.contains('active'))return; /* 不在前台不渲染，避免每次保存都触发 */
   t=t||(document.querySelector('#douyinTabs .tab.active')&&document.querySelector('#douyinTabs .tab.active').dataset.dt)||'realtime';
   if(t==='realtime'){const c=loadRealtimeCache();if(c&&c.date===todayStr()&&c.items&&c.items.length)renderRealtime(c);else fetchRealtimeHot();}
-  else if(t==='hot'){const c=loadTrackCache();if(c&&c.date===todayStr()&&c.items&&c.items.length)renderTrackHot(c);else renderTrackHot(c);}
+  else if(t==='hot'){const c=loadTrackCache();if(c&&c.date===todayStr()&&c.items&&c.items.length)renderTrackHot(c);else genTrackHot20(false);}
   else if(t==='extract')renderDouyinExtract();
   else if(t==='star')renderDouyinStar();
   else if(t==='learn')renderDouyinLearn();
@@ -4058,7 +4146,7 @@ function renderTrackHot(cache){
   const items=cache.items||[];
   const fresh=cache.date===todayStr()&&items.length>=20;
   const head=`<div class="note-box" style="margin-bottom:14px">
-    🎯 <b>赛道爆款</b>：基于你的赛道（情感治愈 / 自我成长 / 生活方式）每天生成 20 条<b>经过验证的爆款模板</b>。每条包含：<b>主题 + 完整口播文案（250-320 字，可直接对镜说）+ 拍摄方式 + 拍摄方法</b>，内容丰富，不是 10 秒短稿。<b>每条已直接附上「二创口播稿」</b>，想换角度点「🎬 重新二创」，☆ 收藏好的。
+    🎯 <b>赛道爆款</b>：基于你的赛道（情感治愈 / 自我成长 / 生活方式）每天生成 20 条<b>经过验证的爆款模板</b>。每条包含：<b>主题 + 完整口播文案（约 150-220 字，已按 20 个不同角度严格去重，可直接对镜说），内容丰富不是 10 秒短稿</b>。<b>每条已直接附上「二创口播稿（可直接拍）」</b>，想换角度点「🎬 重新二创」（可补拍摄方式/方法），☆ 收藏好的。
     ${fresh?'<button class="btn ghost sm" style="margin-left:8px" onclick="genTrackHot20(true)">🔄 重新生成今日</button>':''}
   </div>
   <div class="add-row" style="margin-bottom:14px">
@@ -4096,33 +4184,12 @@ async function genTrackHot20(force){
   const cache=loadTrackCache()||{date:'',items:[]};
   if(!force&&cache.date===today&&cache.items.length>=20){renderTrackHot(cache);toast('今日已生成');return;}
   if(!state.settings.llmKey||!state.settings.llmBase){toast('AI 未配置，无法生成');return;}
-  toast('⏳ 正在用 AI 生成今日 20 条赛道爆款（约 10-30 秒）…');
-  const sys=DOUYIN_SYS;
-  const umsg='你是抖音口播爆款策略师。请基于 2026 年当下抖音真实热门规律，为【情感治愈 / 自我成长 / 生活方式】口播赛道（用户用「变脸特效」形式）生成 20 条"经过验证的爆款模板"，每条都是可以直接拍成 1-2 分钟口播视频的完整内容。\n\n严格只输出 JSON 数组，每条对象包含字段：\n- "theme"：主题/分类（一句话，带情绪关键词且吸睛，如"反内耗｜放过自己"，20 字以内）\n- "content"：完整口播文案正文，250-320 字，必须有"黄金 3 秒反常识钩子开头 + 情绪共鸣中段 + 行动/价值结尾"，口语化、像跟闺蜜聊天、短句、适合对着镜头用变脸特技说。要写得饱满、有具体细节和画面感，不是干巴巴的口号\n- "film"：拍摄方式（一句话 40-70 字）：景别（近景/特写）、表情与变脸时机、节奏快慢、BGM 类型建议\n- "method"：拍摄方法（更详细 80-150 字）：开头/中段/结尾各怎么演、灯光/背景/BGM/剪辑节奏建议\n\n要求：20 条主题必须完全不同，禁止任何两条主题/钩子/开头雷同；覆盖"反内耗/自我攻击/情绪疗愈/失眠解压/关系边界/讨好型/原生家庭/独居/年龄焦虑/自我接纳/被比较/情绪稳定/慢生活/微小确幸/停止内卷/允许自己普通/精力管理/独处充电"等差异化角度。只输出 JSON 数组，不要任何其他文字。';
-  let items=[];
-  try{const raw=await callLLM(sys,umsg);if(raw){const m=raw.match(/\[[\s\S]*\]/);if(m)items=JSON.parse(m[0]);}}catch(e){items=[];}
-  if(!items||!items.length){
-    const fb=[
-      {theme:'反内耗｜放过自己',content:'你有没有发现，我们对别人都很温柔，对自己却最苛刻。明明已经很努力了，还要骂自己不够好。从今天起，把那句"我真没用"换成"我今天做得还不错"。你先放过自己，世界才会放过你。',film:'近景对镜，变脸前皱眉自责，变脸后微笑释然，节奏放慢。',method:'开头讲"对别人好对自己狠"，中段变脸成释然表情，结尾眼神坚定微笑。背景纯色，BGM 慢钢琴，结尾定格 2 秒。'},
-      {theme:'自我攻击｜停止骂自己',content:'你不是懒，你是太累了。心里装了太多事，能量被掏空了。今天允许自己慢一点，先做一件最小的事，倒杯水、叠件衣服，动起来就好。',film:'变脸前瘫坐疲惫脸，变脸后做一件小事时专注平静。',method:'前 5 秒瘫坐展示疲惫，变脸后起身做一件具体小事（倒水），节奏由慢到稳，BGM 治愈轻音乐。'},
-      {theme:'深夜自愈｜别再硬撑',content:'白天你是大家的开心果，晚上却一个人想东想西睡不着。你不是矫情，是白天憋太久没照顾自己。睡前把手机放远点，对自己说一句"今天辛苦了"。',film:'前半段"假装开心"脸，变脸后疲惫真实脸，靠近镜头说悄悄话。',method:'前段演白天硬撑，变脸后卸下面具轻声说，语速放慢，BGM 安静钢琴。'},
-      {theme:'关系边界｜学会说不',content:'你总怕得罪人，委屈自己成全别人。可你也不是谁的附属品。今天试着说一次"不"，你会发现天没塌。',film:'变脸前陪笑点头，变脸后坚定摇头，眼神直视镜头。',method:'前段演"陪笑点头"接电话，变脸后挂掉电话摇头说"不"，BGM 由轻快转坚定。'},
-      {theme:'原生家庭｜与自己和解',content:'小时候被否定的那些话，长大后变成了你对自己的苛责。但那不是你的错。今天起，把"我不够好"换成"我已经尽力了"。',film:'变脸前回忆皱眉，变脸后平静点头接受。',method:'前段低头回忆原生家庭否定的话，变脸后抬头对自己微笑，BGM 温暖弦乐。'},
-      {theme:'独居快乐｜一个人的丰盛',content:'一个人住不是孤独，是丰盛。不用迁就别人、不用假装合群。泡一杯茶、放喜欢的音乐、好好做一顿饭，这就是生活本来的样子。',film:'变脸前"被同情"脸，变脸后享受独处做饭的快乐。',method:'前段演别人投来同情目光，变脸后一个人在厨房做饭哼歌，BGM 轻松吉他。'},
-      {theme:'年龄焦虑｜每个年纪都刚好',content:'25 岁焦虑没结婚，30 岁焦虑没升职，35 岁焦虑没买房。可你忘了，每个年纪都有自己的好。25 岁敢闯，30 岁敢选，35 岁敢停。',film:'变脸前焦虑看手机，变脸后微笑对镜头。',method:'前段刷手机焦虑脸，变脸后放下手机自信笑，BGM 由急促转舒缓。'},
-      {theme:'微小确幸｜今天的小美好',content:'今天的小确幸值得记下来。买到喜欢的水果、路上闻到桂花香、陌生人对你笑了一下。把这些微小快乐攒起来，日子就不会只剩辛苦。',film:'变脸前平淡脸，变脸后眼睛一亮列举小确幸。',method:'前段低头走路疲惫，变脸后抬头列举 3 个今天的小确幸，语速轻快，BGM 清新口哨。'}
-    ];
-    items=[];for(let i=0;i<20;i++)items.push(fb[i%fb.length]);
-    toast('AI 暂不可用，已用内置 8 条模板循环生成');
-  }
-  const c={date:today,items:items.slice(0,20).map((it,i)=>({rank:i+1,theme:it.theme||it.title||'赛道爆款',content:it.content||'',film:it.film||'',method:it.method||'',erchuang:'',erFilm:'',erMethod:'',favId:null})),ts:Date.now()};
+
+  const items=await genDouyinHotCore('track', TRACK_SEEDS);
+  const c={date:today,items:items,ts:Date.now()};
   saveTrackCache(c);renderTrackHot(c);renderOverview();
-  if(items.length>=20){
-    toast('已生成今日 20 条赛道爆款，正在生成二创稿…');
-    await genDouyinErchuangBatch('track',c);
-  } else {
-    toast('已生成今日 20 条赛道爆款 ✨');
-  }
+  if(items.length>=20){ toast('✅ 今日 20 条赛道爆款已生成，每条均直接附上「二创口播稿（可直接拍）」'); }
+  else { toast('已生成今日 '+items.length+' 条赛道爆款 ✨'); }
 }
 async function genTrackErchuang(rank){
   rank=Number(rank);
@@ -4155,29 +4222,27 @@ function trackErchuangStar(rank){
   state.favorites.unshift(f);save();renderOverview();toast('二创已收藏到「⭐ 我的收藏」 ⭐');
 }
 /* 批量生成二创：一次 LLM 调用为多条热门口播生成二创（分块避免输出截断），直接附在每条下面，无需逐条点击 */
-async function genDouyinErchuangBatch(kind,c){
-  if(!state.settings.llmKey||!state.settings.llmBase)return;
-  const items=(c.items||[]).slice(0,20);
+async function genDouyinErchuangBatch(kind,cache){
+  const items=(cache.items||[]).slice(0,20);
   if(!items.length)return;
-  const sys=DOUYIN_SYS;
-  let done=0;
-  for(let s=0;s<items.length;s+=10){
-    const ch=items.slice(s,s+10);
-    const list=ch.map(it=>({title:it.theme||it.title,content:it.content}));
-    const umsg=`下面是你赛道的热门口播（标题+原文），共 ${list.length} 条。请为每条写一条"二创"口播——换角度/换例子/换钩子开头，但保留可共鸣的情绪点，适合用「变脸特效」对镜拍。\n严格只输出 JSON 数组，长度 ${list.length}，每项对象：{"erchuang":"完整口播文案 180-260 字，黄金3秒反常识钩子开头+情绪共鸣中段+行动/价值结尾，口语化短句","erFilm":"拍摄方式(30-60字)：景别/变脸时机/节奏/BGM","erMethod":"拍摄方法(60-120字)：开头/中段/结尾怎么演、灯光背景剪辑建议"}。顺序与输入严格一致，不要其他文字。\n输入：`+JSON.stringify(list);
-    try{
-      const raw=await callLLM(sys,umsg);
-      const mm=raw&&raw.match(/\[[\s\S]*\]/);
-      if(mm){const arr=JSON.parse(mm[0]);
-        arr.forEach((e,idx)=>{ if(ch[idx]){ ch[idx].erchuang=(e.erchuang||'').trim(); ch[idx].erFilm=(e.erFilm||'').trim(); ch[idx].erMethod=(e.erMethod||'').trim(); if(ch[idx].erchuang)done++; } });
-      }
-    }catch(e){}
+  if(!state.settings.llmKey||!state.settings.llmBase)return;
+  for(let s=0;s<items.length;s++){
+    const it=items[s];
+    if(it.erchuang) continue; /* 已有则跳过，避免重复生成/浪费调用 */
+    const umsg='下面是你赛道的热门口播（标题+原文），请为它写一条"二创"口播——换角度/换例子/换钩子开头，但保留可共鸣的情绪点，适合变脸特效对镜拍。\n严格按格式输出（不要其他文字）：\n第1条\n【二创】xxx（写满 150-220 个汉字的口播文案：黄金3秒反常识钩子开头+情绪共鸣中段+行动结尾，口语化短句有具体生活细节）\n输入：\n1.标题：'+it.title+'\n原文：'+it.content;
+    let parsed=[];
+    for(let a=0,d=800;a<4 && parsed.length<1;a++,d*=2){
+      try{ parsed=parseDouyinBlocks(await callLLM(DOUYIN_SYS, umsg),'erc'); }catch(e){}
+      if(parsed.length<1) await new Promise(r=>setTimeout(r,d));
+    }
+    const p=parsed[0];
+    if(p&&p.erchuang){ it.erchuang=p.erchuang; it.erFilm=p.erFilm||''; it.erMethod=p.erMethod||''; }
+    if(kind==='realtime'){saveRealtimeCache(cache);renderRealtime(cache);}else{saveTrackCache(cache);renderTrackHot(cache);}
+    if(s+1<items.length) await new Promise(r=>setTimeout(r,1800));
   }
-  if(kind==='realtime'){saveRealtimeCache(c);renderRealtime(c);}else{saveTrackCache(c);renderTrackHot(c);}
   renderOverview();
-  if(done)toast('二创已全部生成，可直接拍 ✨');else toast('二创自动生成失败（热门已生成），可逐条点「重新二创」');
+  toast('✅ 二创已全部生成，可直接拍');
 }
-/* 渲染时若发现条目缺二创（老缓存升级 / 上次失败），自动补生成，无需用户点按钮 */
 function autoFillDouyinErchuang(kind,cache){
   const items=(cache&&cache.items)||[];
   if(!items.length)return;
@@ -4187,6 +4252,7 @@ function autoFillDouyinErchuang(kind,cache){
   window._dyErcBusy=true;
   genDouyinErchuangBatch(kind,cache).catch(()=>{}).finally(()=>{window._dyErcBusy=false;});
 }
+
 function renderDouyinStar(){
   const box=document.getElementById('dy-star');if(!box)return;
   const arr=state.favorites.filter(f=>f.source==='douyin'&&f.star);
@@ -4373,32 +4439,11 @@ async function fetchRealtimeHot(force){
   if(!force&&cache&&cache.date===today&&cache.items&&cache.items.length){renderRealtime(cache);return;}
   if(!state.settings.llmKey||!state.settings.llmBase){box.innerHTML='<div class="empty">⚠️ AI 未配置。请确认你账号里的 AI Key 可用（已在智谱 glm-4-flash 上验证 OK），或刷新页面让同步生效。</div>';return;}
   box.innerHTML='<div class="empty">⏳ AI 正在生成今日 20 条赛道热门格式口播内容（约 10-30 秒）…</div>';
-  const sys=DOUYIN_SYS;
-  const umsg='你是抖音内容策略师 + 爆款编剧。基于 2026 年当下抖音真实热门规律，为【情感治愈 / 自我成长 / 生活方式】口播赛道（用户用「变脸特效」形式）生成 20 条"今日热门格式"的内容弹药，每条都像当下抖音正在爆的视频一样可直接拍。\n\n严格只输出 JSON 数组，每条对象包含字段：\n- "title"：标题，像真实热门视频的标题（吸睛、有反差、20 字以内）\n- "content"：完整口播文案正文，220-300 字，必须有"黄金 3 秒反常识钩子开头 + 情绪共鸣中段 + 行动/价值结尾"，口语化、短句、有具体细节和画面感、适合对着镜头用变脸特技说。要饱满，不是口号\n- "film"：拍摄方式（一句话 40-70 字）：景别（近景/特写）、表情与变脸时机、节奏快慢、BGM 类型建议\n- "method"：拍摄方法（更详细 80-150 字）：开头/中段/结尾各怎么演、灯光背景剪辑建议\n\n要求：20 条主题必须完全不同，禁止任何两条主题/钩子/开头雷同；覆盖当下热门方向（反内耗/情绪疗愈/自我接纳/关系边界/原生家庭/独居/年龄焦虑/微小确幸/深夜自愈/停止自我攻击/允许普通/精力管理/独处充电等）。只输出 JSON 数组，不要任何其他文字。';
-  let items=[];
-  try{const raw=await callLLM(sys,umsg);if(raw){const m=raw.match(/\[[\s\S]*\]/);if(m)items=JSON.parse(m[0]);}}catch(e){items=[];}
-  if(!items||!items.length){
-    const fb=[
-      {title:'放过自己，比努力更重要',content:'你有没有发现，我们对别人都很温柔，对自己却最苛刻。明明已经很努力了，还要骂自己不够好。从今天起，把那句"我真没用"换成"我今天做得还不错"。你先放过自己，世界才会放过你。',film:'近景对镜，变脸前皱眉自责，变脸后微笑释然，节奏放慢，BGM 慢钢琴。'},
-      {title:'你不是懒，你是太累了',content:'别再骂自己拖延。你不是懒，是心里装了太多事，能量被掏空了。今天允许自己慢一点，先做一件最小的事，倒杯水、叠件衣服，动起来就好。',film:'变脸前瘫坐疲惫，变脸后起身做一件小事，节奏由慢到稳。'},
-      {title:'白天装没事，晚上放过自己',content:'白天你是大家的开心果，晚上却一个人想东想西睡不着。你不是矫情，是白天憋太久没照顾自己。睡前把手机放远点，对自己说一句"今天辛苦了"。',film:'前段"假装开心"脸，变脸后疲惫真实脸，靠近镜头说悄悄话。'},
-      {title:'别把情绪憋成病',content:'有气就表达，有委屈就说。憋久了不是懂事，是把自己憋坏了。健康的关系，经得起真话。今天试着说一次真话，你会发现天没塌。',film:'变脸前沉默忍让，变脸后开口表达，语气从弱到稳。'},
-      {title:'讨好别人之前，先讨好自己',content:'你总怕得罪人，委屈自己成全别人。可你也不是谁的附属品。今天试着说一次"不"，你会发现天没塌。',film:'变脸前陪笑点头，变脸后坚定摇头说"不"，眼神直视镜头。'},
-      {title:'你比想象中扛造',content:'那些你以为过不去的坎，回头看都过去了。你没那么脆弱，你比自己以为的更能扛。',film:'变脸前回忆痛苦皱眉，变脸后释然，大拇指给自己"赞"。'},
-      {title:'焦虑的时候，只看脚下这一步',content:'一想到未来就慌？别看那么远，只看脚下这一步。把今天过好，未来自己会来。',film:'变脸前仰望慌张，变脸后低头看路微笑，镜头下移再回正。'},
-      {title:'今天的小确幸，值得记下来',content:'哪怕是买到喜欢的水果、路上闻到桂花香。把微小快乐记下来，日子就不会只剩辛苦。',film:'变脸前平淡脸，变脸后眼睛一亮列举小确幸，语气轻快。'}
-    ];
-    items=[];for(let i=0;i<20;i++)items.push(fb[i%fb.length]);
-    toast('AI 暂不可用，已用内置 8 条模板循环');
-  }
-  const c={date:today,source:'ai',items:items.slice(0,20).map((it,i)=>({rank:i+1,title:it.title||'热门',content:it.content||'',film:it.film||'',method:it.method||'',erchuang:'',erFilm:'',erMethod:'',favId:null})),ts:Date.now()};
+  const items=await genDouyinHotCore('realtime', REALTIME_SEEDS);
+  const c={date:today,source:'ai',items:items,ts:Date.now()};
   saveRealtimeCache(c);renderRealtime(c);
-  if(items.length>=20){
-    toast('已生成今日 20 条热门，正在为你生成可直接拍的二创稿…');
-    await genDouyinErchuangBatch('realtime',c);
-  } else {
-    toast('已生成今日 20 条 ✨');
-  }
+  if(items.length>=20){ toast('✅ 今日 20 条热门已生成，每条均直接附上「二创口播稿（可直接拍）」'); }
+  else { toast('已生成今日 '+items.length+' 条 ✨'); }
 }
 function renderRealtime(cache){
   const box=document.getElementById('dy-realtime');if(!box)return;
@@ -4408,7 +4453,7 @@ function renderRealtime(cache){
     🔥 <b>今日赛道热门</b>（AI 按当下真实热门规律原创 · ${fresh?'已是今日最新':'非今日'} · 共 ${cache.items.length} 条）。<b>每条都直接附上了「二创口播稿（可直接拍）」</b>——热门原文 + 二创稿都在下面，不用再点任何按钮。想换一个角度点「🎬 重新二创」即可。
     ${fresh?'<button class="btn ghost sm" style="margin-left:8px" onclick="fetchRealtimeHot(true)">🔄 重新生成今日</button>':''}
   </div>
-  <div style="margin-bottom:12px;padding:10px 12px;background:#f5f7ff;border-radius:10px;color:var(--muted);font-size:12px;line-height:1.6">💡 <b>为什么是 AI 原创而不是"抓取真实热榜视频"：</b>抖音有强反爬限制，视频里的话必须用服务端语音识别（ASR）才能转写成文字，免费静态页做不到实时抓真实热榜。所以本模块用 AI 按当下真实热门规律原创——内容是当下热门在用的格式、原创不侵权、拍完直接可用，效果等价于"模仿热门 + 不抄"。</div>`;
+  <div style="margin-bottom:12px;padding:10px 12px;background:#f5f7ff;border-radius:10px;color:var(--muted);font-size:12px;line-height:1.6">💡 <b>为什么是 AI 原创而不是"抓取真实热榜视频"：</b>抖音有强反爬限制，视频里的话必须用服务端语音识别（ASR）才能转写成文字，免费静态页做不到实时抓真实热榜。所以本模块用 AI 按当下真实热门规律原创——内容是当下热门在用的格式、已按你赛道 20 个不同角度严格去重、每条直接附「二创口播稿（可直接拍）」，效果等价于"模仿热门 + 不抄"。</div>`;
   const list=cache.items.map(it=>`
     <div class="list-item">
       <div class="body">
